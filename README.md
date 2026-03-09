@@ -1,5 +1,12 @@
 # LiDAR to Mesh using Neural Kernel Surface Reconstruction
 
+## Related work
+
+- [Neural Kernel Surface Reconstruction](https://github.com/nv-tlabs/NKSR)
+- [fVDB](https://github.com/openvdb/fvdb-core)
+- [PCD Meshing](https://github.com/cvg/pcdmeshing)
+- [POCO](https://github.com/valeoai/POCO)
+
 ## Setup
 
 ### Repository
