@@ -31,15 +31,12 @@ xyz -= centroid
 print(f"Loaded {len(xyz):,} points.")
 
 # ── 2. High accuracy normal estimation ────────────────────────────────────
-print("Estimating normals (full cloud, high accuracy)...")
-pcd_full = o3d.geometry.PointCloud()
-pcd_full.points = o3d.utility.Vector3dVector(xyz)
-pcd_full.estimate_normals(
-    search_param=o3d.geometry.KDTreeSearchParamHybrid(radius=0.3, max_nn=50)
+print("Loading point cloud with normals from PLY...")
+pcd = o3d.io.read_point_cloud(
+    "/work/scratch/oscipal/2026-03-09_16.19.44/pointcloud.ply"
 )
-pcd_full.orient_normals_consistent_tangent_plane(k=20)
-normals = np.asarray(pcd_full.normals).astype(np.float32)
-print("Normals estimated.")
+normals = np.asarray(pcd.normals).astype(np.float32)
+print("Normals loaded — no estimation needed.")
 
 # ── 3. Assign points to fine chunks ───────────────────────────────────────
 VOXEL_SIZE = 0.1

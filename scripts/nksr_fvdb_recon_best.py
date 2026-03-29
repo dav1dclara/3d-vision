@@ -4,10 +4,8 @@ import numpy as np
 import torch
 import laspy
 import open3d as o3d
-import fvdb
 import nksr
 from collections import defaultdict
-from scipy.spatial import cKDTree
 
 os.makedirs("outputs", exist_ok=True)
 if os.path.exists("outputs/chunks"):
@@ -32,16 +30,13 @@ centroid = xyz.mean(axis=0)
 xyz -= centroid
 print(f"Loaded {len(xyz):,} points.")
 
-# ── 2. High accuracy normal estimation on full cloud ──────────────────────
-print("Estimating normals (full cloud, high accuracy)...")
-pcd_full = o3d.geometry.PointCloud()
-pcd_full.points = o3d.utility.Vector3dVector(xyz)
-pcd_full.estimate_normals(
-    search_param=o3d.geometry.KDTreeSearchParamHybrid(radius=0.3, max_nn=50)
+# ── 2. High accuracy normal estimation ────────────────────────────────────
+print("Loading point cloud with normals from PLY...")
+pcd = o3d.io.read_point_cloud(
+    "/work/scratch/oscipal/2026-03-09_16.19.44/pointcloud.ply"
 )
-pcd_full.orient_normals_consistent_tangent_plane(k=20)
-normals = np.asarray(pcd_full.normals).astype(np.float32)
-print("Normals estimated.")
+normals = np.asarray(pcd.normals).astype(np.float32)
+print("Normals loaded — no estimation needed.")
 
 # ── 3. Assign points to fine chunks ───────────────────────────────────────
 VOXEL_SIZE = 0.1
@@ -105,7 +100,7 @@ def get_neighbours(key):
 
 print("Running region growing...")
 visited = set()
-regions = []
+regions = []  # list of (region_keys, is_planar)
 
 for start_key in chunk_data:
     if start_key in visited:
@@ -137,53 +132,93 @@ for start_key in chunk_data:
             elif not chunk['is_planar'] and not nb['is_planar']:
                 queue.append(nb_key)
 
-    regions.append(region)
+    is_planar_region = all(chunk_data[k]['is_planar'] for k in region)
+    regions.append((region, is_planar_region))
 
 print(f"Total regions: {len(regions)}")
-sizes = sorted([len(r) for r in regions], reverse=True)
-print(f"Top 10 region sizes (fine chunks): {sizes[:10]}")
+planar_regions  = [(r, p) for r, p in regions if p]
+complex_regions = [(r, p) for r, p in regions if not p]
+print(f"Planar regions: {len(planar_regions)}, "
+      f"Complex regions: {len(complex_regions)}")
 
-# ── 6. Reconstruction setup ───────────────────────────────────────────────
-reconstructor    = nksr.Reconstructor(torch.device("cuda:0"))
-MIN_PTS          = 500
-OVERLAP_DEFAULT  = 0.1
-OVERLAP_BOUNDARY = 0.3
-CONTEXT_VOX      = 0.15
-chunk_files      = []
-chunk_counter    = [0]
+# ── 6. Build reconstruction units ────────────────────────────────────────
+# Each reconstruction unit is a set of fine chunk keys that get
+# reconstructed together in one NKSR call.
+# Strategy:
+# - Complex region + ALL adjacent planar chunks → one unit
+# - Small/medium planar regions adjacent to complex → absorbed
+# - Large isolated planar regions → own unit
 
-# No MAX_PTS cap — use full density always
-# Only subsample if OOM
+SMALL_PLANAR_PTS  = 500
+MEDIUM_PLANAR_PTS = 2000
 
-def save_mesh(verts, faces, mesh, core_min, core_max, label):
-    trim_min = core_min + centroid
-    trim_max = core_max + centroid
-    in_core  = np.all((verts >= trim_min) & (verts <= trim_max), axis=1)
-    face_mask  = (in_core[faces[:, 0]] &
-                  in_core[faces[:, 1]] &
-                  in_core[faces[:, 2]])
-    faces_core = faces[face_mask]
+# Map each chunk key to its region index
+chunk_to_region = {}
+for region_idx, (region_keys, is_planar) in enumerate(regions):
+    for key in region_keys:
+        chunk_to_region[key] = region_idx
 
-    if len(faces_core) == 0:
-        return None
+# Find which planar regions are adjacent to each complex region
+complex_adjacent_planar = defaultdict(set)  # complex_region_idx -> set of planar region idxs
+for region_idx, (region_keys, is_planar) in enumerate(regions):
+    if is_planar:
+        continue
+    for key in region_keys:
+        for nb_key in get_neighbours(key):
+            if nb_key not in chunk_data:
+                continue
+            nb_region_idx = chunk_to_region.get(nb_key)
+            if nb_region_idx is None:
+                continue
+            if regions[nb_region_idx][1]:  # neighbour is planar
+                complex_adjacent_planar[region_idx].add(nb_region_idx)
 
-    used        = np.unique(faces_core)
-    remap       = np.full(len(verts), -1)
-    remap[used] = np.arange(len(used))
-    verts_core  = verts[used]
-    faces_core  = remap[faces_core]
+# Determine which planar regions get absorbed into complex units
+absorbed_planar = set()  # planar region indices that are absorbed
 
-    chunk_mesh = o3d.geometry.TriangleMesh()
-    chunk_mesh.vertices  = o3d.utility.Vector3dVector(verts_core)
-    chunk_mesh.triangles = o3d.utility.Vector3iVector(faces_core)
-    if has_color and hasattr(mesh, 'c') and mesh.c is not None:
-        vc = np.clip(mesh.c.cpu().numpy(), 0.0, 1.0)[used]
-        chunk_mesh.vertex_colors = o3d.utility.Vector3dVector(vc)
+reconstruction_units = []  # list of (chunk_keys_set, label)
 
-    chunk_path = f"outputs/chunks/{label}_{chunk_counter[0]:05d}.ply"
-    chunk_counter[0] += 1
-    o3d.io.write_triangle_mesh(chunk_path, chunk_mesh)
-    return chunk_path
+# Build complex units — each complex region + its adjacent planar regions
+for region_idx, (region_keys, is_planar) in enumerate(regions):
+    if is_planar:
+        continue
+
+    unit_keys = set(region_keys)
+    adjacent_planar_idxs = complex_adjacent_planar[region_idx]
+
+    for planar_idx in adjacent_planar_idxs:
+        planar_keys, _ = regions[planar_idx]
+        n_pts = sum(chunk_data[k]['n_pts'] for k in planar_keys)
+
+        # Always absorb small and medium planar regions
+        # Also absorb large ones that are adjacent to this complex region
+        unit_keys.update(planar_keys)
+        absorbed_planar.add(planar_idx)
+
+    reconstruction_units.append((unit_keys, f"complex_{region_idx:05d}"))
+
+# Build planar-only units for non-absorbed planar regions
+for region_idx, (region_keys, is_planar) in enumerate(regions):
+    if not is_planar:
+        continue
+    if region_idx in absorbed_planar:
+        continue
+
+    n_pts = sum(chunk_data[k]['n_pts'] for k in region_keys)
+    reconstruction_units.append((set(region_keys),
+                                  f"planar_{region_idx:05d}"))
+
+print(f"Reconstruction units: {len(reconstruction_units)}")
+print(f"  Complex+planar units: "
+      f"{sum(1 for _, l in reconstruction_units if 'complex' in l)}")
+print(f"  Planar-only units: "
+      f"{sum(1 for _, l in reconstruction_units if 'planar' in l)}")
+
+# ── 7. Reconstruction helpers ─────────────────────────────────────────────
+reconstructor  = nksr.Reconstructor(torch.device("cuda:0"))
+MIN_PTS        = 200
+chunk_files    = []
+chunk_counter  = [0]
 
 def run_nksr(pts_np, nrm_np, clr_np, detail, mise, vox_size):
     chunk_pts = torch.from_numpy(pts_np).float().cuda()
@@ -235,214 +270,95 @@ def smart_subsample(pts_np, nrm_np, clr_np, max_pts, vox_size):
             np.asarray(down.colors).astype(np.float32)
             if clr_np is not None else None)
 
-# ── 7. Planar region reconstruction ──────────────────────────────────────
-def reconstruct_planar(region_pts, region_indices,
-                       detail, mise, vox_size,
-                       overlap_m, label):
-    core_min = region_pts.min(axis=0)
-    core_max = region_pts.max(axis=0)
+def save_mesh(verts, faces, mesh, label):
+    """Save without trimming — no boundary artifacts."""
+    chunk_mesh = o3d.geometry.TriangleMesh()
+    chunk_mesh.vertices  = o3d.utility.Vector3dVector(verts)
+    chunk_mesh.triangles = o3d.utility.Vector3iVector(faces)
+    if has_color and hasattr(mesh, 'c') and mesh.c is not None:
+        vc = np.clip(mesh.c.cpu().numpy(), 0.0, 1.0)
+        chunk_mesh.vertex_colors = o3d.utility.Vector3dVector(vc)
 
-    rmin = core_min - overlap_m
-    rmax = core_max + overlap_m
-    mask = np.all((xyz >= rmin) & (xyz <= rmax), axis=1)
+    chunk_path = f"outputs/chunks/{label}_{chunk_counter[0]:05d}.ply"
+    chunk_counter[0] += 1
+    o3d.io.write_triangle_mesh(chunk_path, chunk_mesh)
+    return chunk_path
 
-    pts_exp = xyz[mask]
-    nrm_exp = normals[mask]
-    clr_exp = colors[mask] if has_color else None
+# ── 8. Reconstruct all units ──────────────────────────────────────────────
+print("\nReconstructing units...")
 
-    # Planar regions get smart subsampled — full density not needed
-    pts_exp, nrm_exp, clr_exp = smart_subsample(
-        pts_exp, nrm_exp, clr_exp, 300_000, vox_size
-    )
+for unit_idx, (unit_keys, label) in enumerate(reconstruction_units):
+    # Collect all point indices in this unit
+    all_indices = np.concatenate([chunk_data[k]['indices']
+                                   for k in unit_keys])
+    unit_pts = xyz[all_indices]
 
-    result = run_nksr(pts_exp, nrm_exp, clr_exp, detail, mise, vox_size)
-    if result is None:
-        return None
-    verts, faces, mesh = result
-    return save_mesh(verts, faces, mesh, core_min, core_max, label)
-
-# ── 8. Complex region reconstruction with planar context ─────────────────
-def reconstruct_complex(region_pts, region_indices,
-                        region_keys, label):
-    core_min = region_pts.min(axis=0)
-    core_max = region_pts.max(axis=0)
-
-    # Full density complex points — no cap
-    pts_list = [region_pts]
-    nrm_list = [normals[region_indices]]
-    clr_list = [colors[region_indices]] if has_color else []
-
-    # Downsampled planar context — 2 chunks deep for better edge quality
-    region_key_set    = set(region_keys)
-    planar_nb_indices = set()
-
-    # First ring of planar neighbours
-    first_ring = set()
-    for key in region_keys:
-        for nb_key in get_neighbours(key):
-            if nb_key not in chunk_data:
-                continue
-            if (chunk_data[nb_key]['is_planar'] and
-                    nb_key not in region_key_set):
-                first_ring.add(nb_key)
-                planar_nb_indices.update(
-                    chunk_data[nb_key]['indices'].tolist()
-                )
-
-    # Second ring of planar neighbours
-    for key in first_ring:
-        for nb_key in get_neighbours(key):
-            if nb_key not in chunk_data:
-                continue
-            if (chunk_data[nb_key]['is_planar'] and
-                    nb_key not in region_key_set and
-                    nb_key not in first_ring):
-                planar_nb_indices.update(
-                    chunk_data[nb_key]['indices'].tolist()
-                )
-
-    if planar_nb_indices:
-        nb_idx     = np.array(list(planar_nb_indices))
-        planar_pts = xyz[nb_idx]
-        planar_nrm = normals[nb_idx]
-        planar_clr = colors[nb_idx] if has_color else None
-
-        pcd_ctx = o3d.geometry.PointCloud()
-        pcd_ctx.points  = o3d.utility.Vector3dVector(planar_pts)
-        pcd_ctx.normals = o3d.utility.Vector3dVector(planar_nrm)
-        if planar_clr is not None:
-            pcd_ctx.colors = o3d.utility.Vector3dVector(planar_clr)
-        pcd_ctx_down = pcd_ctx.voxel_down_sample(voxel_size=CONTEXT_VOX)
-
-        ctx_pts = np.asarray(pcd_ctx_down.points).astype(np.float32)
-        ctx_nrm = np.asarray(pcd_ctx_down.normals).astype(np.float32)
-        ctx_clr = (np.asarray(pcd_ctx_down.colors).astype(np.float32)
-                   if has_color else None)
-
-        pts_list.append(ctx_pts)
-        nrm_list.append(ctx_nrm)
-        if has_color:
-            clr_list.append(ctx_clr)
-
-    pts_merged = np.concatenate(pts_list, axis=0)
-    nrm_merged = np.concatenate(nrm_list, axis=0)
-    clr_merged = np.concatenate(clr_list, axis=0) if has_color else None
-
-    n_complex_pts = len(region_pts)
-    n_context_pts = len(pts_merged) - n_complex_pts
-    print(f"    Complex: {n_complex_pts:,} pts (full density) + "
-          f"context: {n_context_pts:,} pts → total: {len(pts_merged):,}")
-
-    # Try full density first
-    result = run_nksr(pts_merged, nrm_merged, clr_merged,
-                      1.0, 2, VOXEL_SIZE * 0.5)
-
-    if result is None:
-        # OOM — subsample complex part only, keep full context
-        print(f"    OOM — subsampling complex part only...")
-        ctx_pts = pts_merged[n_complex_pts:]
-        ctx_nrm = nrm_merged[n_complex_pts:]
-        ctx_clr = clr_merged[n_complex_pts:] if has_color else None
-
-        # Try progressively harder subsampling
-        for max_c in [500_000, 300_000, 150_000, 50_000]:
-            c_pts, c_nrm, c_clr = smart_subsample(
-                pts_merged[:n_complex_pts],
-                nrm_merged[:n_complex_pts],
-                clr_merged[:n_complex_pts] if has_color else None,
-                max_c, VOXEL_SIZE * 0.5,
-            )
-            pts_try = np.concatenate([c_pts, ctx_pts])
-            nrm_try = np.concatenate([c_nrm, ctx_nrm])
-            clr_try = np.concatenate([c_clr, ctx_clr]) if has_color else None
-
-            print(f"      Trying {len(pts_try):,} pts "
-                  f"(complex capped at {max_c:,})...")
-            result = run_nksr(pts_try, nrm_try, clr_try,
-                              1.0, 2, VOXEL_SIZE * 0.5)
-            if result is not None:
-                break
-
-        # If still failing, fall back to coarser voxel
-        if result is None:
-            print(f"      Falling back to vox=0.1...")
-            pts_s, nrm_s, clr_s = smart_subsample(
-                pts_merged, nrm_merged, clr_merged,
-                100_000, VOXEL_SIZE
-            )
-            result = run_nksr(pts_s, nrm_s, clr_s,
-                              1.0, 2, VOXEL_SIZE)
-            if result is None:
-                return None
-
-    verts, faces, mesh = result
-    return save_mesh(verts, faces, mesh, core_min, core_max, label)
-
-# ── 9. Reconstruct all regions ────────────────────────────────────────────
-print("\nReconstructing regions...")
-
-for region_idx, region_keys in enumerate(regions):
-    region_indices = np.concatenate([chunk_data[k]['indices']
-                                     for k in region_keys])
-    region_pts     = xyz[region_indices]
-
-    if len(region_pts) < MIN_PTS:
+    if len(unit_pts) < MIN_PTS:
         continue
 
-    is_planar_region = all(chunk_data[k]['is_planar'] for k in region_keys)
-    max_residual     = np.max([chunk_data[k]['residual']
-                               for k in region_keys])
+    unit_nrm = normals[all_indices]
+    unit_clr = colors[all_indices] if has_color else None
 
-    touches_boundary = False
-    for key in region_keys:
-        for nb_key in get_neighbours(key):
-            if nb_key not in chunk_data:
-                continue
-            if chunk_data[nb_key]['is_planar'] != is_planar_region:
-                touches_boundary = True
-                break
-        if touches_boundary:
-            break
+    is_complex_unit = 'complex' in label
+    n_pts = len(unit_pts)
 
-    overlap_m = OVERLAP_BOUNDARY if touches_boundary else OVERLAP_DEFAULT
-
-    if is_planar_region:
+    # Adaptive quality
+    if is_complex_unit:
+        detail, mise, vox_size = 1.0, 2, VOXEL_SIZE * 0.5
+    else:
+        # Planar-only unit
+        max_residual = np.max([chunk_data[k]['residual']
+                                for k in unit_keys])
         if max_residual < 0.02:
             detail, mise, vox_size = 0.3, 1, VOXEL_SIZE * 2.0
         else:
             detail, mise, vox_size = 0.5, 1, VOXEL_SIZE * 1.5
-        if touches_boundary:
-            mise = max(mise, 2)
 
-        print(f"  Region {region_idx+1}/{len(regions)} [planar]: "
-              f"{len(region_pts):,} pts | "
-              f"residual={max_residual:.4f} | "
-              f"boundary={'yes' if touches_boundary else 'no'} | "
-              f"detail={detail}, vox={vox_size:.3f}")
+    print(f"  Unit {unit_idx+1}/{len(reconstruction_units)} "
+          f"[{'complex+planar' if is_complex_unit else 'planar'}]: "
+          f"{n_pts:,} pts | vox={vox_size:.3f}")
 
-        path = reconstruct_planar(
-            region_pts, region_indices,
-            detail, mise, vox_size,
-            overlap_m,
-            label=f"planar_{region_idx:05d}"
+    # Try full density first for complex units
+    # Subsample for planar-only units
+    if not is_complex_unit:
+        unit_pts, unit_nrm, unit_clr = smart_subsample(
+            unit_pts, unit_nrm, unit_clr, 300_000, vox_size
         )
 
-    else:
-        print(f"  Region {region_idx+1}/{len(regions)} [complex]: "
-              f"{len(region_pts):,} pts | "
-              f"residual={max_residual:.4f} | "
-              f"boundary={'yes' if touches_boundary else 'no'}")
+    result = run_nksr(unit_pts, unit_nrm, unit_clr,
+                      detail, mise, vox_size)
 
-        path = reconstruct_complex(
-            region_pts, region_indices,
-            region_keys,
-            label=f"complex_{region_idx:05d}"
-        )
+    if result is None and is_complex_unit:
+        # OOM — progressively subsample
+        print(f"    OOM — subsampling...")
+        for max_c in [500_000, 300_000, 150_000, 50_000]:
+            s_pts, s_nrm, s_clr = smart_subsample(
+                unit_pts, unit_nrm, unit_clr, max_c, vox_size
+            )
+            print(f"      Trying {len(s_pts):,} pts...")
+            result = run_nksr(s_pts, s_nrm, s_clr,
+                              detail, mise, vox_size)
+            if result is not None:
+                break
 
+        if result is None:
+            print(f"      Falling back to vox=0.1...")
+            s_pts, s_nrm, s_clr = smart_subsample(
+                unit_pts, unit_nrm, unit_clr, 100_000, VOXEL_SIZE
+            )
+            result = run_nksr(s_pts, s_nrm, s_clr,
+                              1.0, 2, VOXEL_SIZE)
+
+    if result is None:
+        print(f"    Failed, skipping.")
+        continue
+
+    verts, faces, mesh = result
+    path = save_mesh(verts, faces, mesh, label)
     if path:
         chunk_files.append(path)
 
-# ── 10. Merge all PLYs ────────────────────────────────────────────────────
+# ── 9. Merge all PLYs ─────────────────────────────────────────────────────
 print(f"\nMerging {len(chunk_files)} files...")
 merged = o3d.geometry.TriangleMesh()
 for i, path in enumerate(chunk_files):

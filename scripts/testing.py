@@ -1,50 +1,47 @@
-import numpy as np
-import laspy
+import os
+import glob
 import open3d as o3d
-import torch
-import fvdb
+import numpy as np
 
-las = laspy.read("/work/scratch/oscipal/2026-03-09_16.19.44/pointcloud.las")
-xyz = np.vstack([las.x, las.y, las.z]).T.astype(np.float32)
-centroid = xyz.mean(axis=0)
-xyz -= centroid
-xyz_t = torch.from_numpy(xyz).float().cuda()
+# ── Decimate planar chunks only ───────────────────────────────────────────
+print("Decimating planar chunks...")
+planar_chunks  = sorted(glob.glob("outputs/chunks/planar_*.ply"))
+complex_chunks = sorted(glob.glob("outputs/chunks/complex_*.ply"))
+print(f"Planar chunks: {len(planar_chunks)}")
+print(f"Complex chunks: {len(complex_chunks)}")
 
-VOXEL_SIZE   = 0.1
-CHUNK_VOXELS = 80
-OVERLAP      = 32
+# Check total triangle counts
+planar_total  = sum(len(o3d.io.read_triangle_mesh(c).triangles)
+                    for c in planar_chunks)
+complex_total = sum(len(o3d.io.read_triangle_mesh(c).triangles)
+                    for c in complex_chunks)
+print(f"Planar triangles:  {planar_total:,}")
+print(f"Complex triangles: {complex_total:,}")
 
-grid = fvdb.GridBatch.from_points(
-    fvdb.JaggedTensor([xyz_t]),
-    voxel_sizes=[VOXEL_SIZE] * 3,
-    origins=[0.0, 0.0, 0.0],
-)
-bbox    = grid.bbox_at(0).cpu().numpy()
-ijk_min = bbox[0].astype(int)
-ijk_max = bbox[1].astype(int)
+# Merge and decimate planar only
+print("Merging planar chunks...")
+planar_merged = o3d.geometry.TriangleMesh()
+for path in planar_chunks:
+    chunk = o3d.io.read_triangle_mesh(path)
+    planar_merged += chunk
+    del chunk
 
-def compute_planarity(pts_np):
-    centered = pts_np - pts_np.mean(axis=0)
-    _, s, _ = np.linalg.svd(centered, full_matrices=False)
-    return s[2] / (s[0] + 1e-8)
+# Decimate planar to 20% of original — flat surfaces survive this well
+target = max(100_000, len(planar_merged.triangles) // 5)
+print(f"Decimating planar: {len(planar_merged.triangles):,} → {target:,}")
+planar_dec = planar_merged.simplify_quadric_decimation(target)
+del planar_merged
 
-for ix in range(int(ijk_min[0]), int(ijk_max[0]), CHUNK_VOXELS):
-    for iy in range(int(ijk_min[1]), int(ijk_max[1]), CHUNK_VOXELS):
-        for iz in range(int(ijk_min[2]), int(ijk_max[2]), CHUNK_VOXELS):
-            cmin = [ix - OVERLAP, iy - OVERLAP, iz - OVERLAP]
-            cmax = [ix + CHUNK_VOXELS + OVERLAP,
-                    iy + CHUNK_VOXELS + OVERLAP,
-                    iz + CHUNK_VOXELS + OVERLAP]
+# Merge complex chunks at full resolution
+print("Merging complex chunks...")
+final = planar_dec
+for path in complex_chunks:
+    chunk = o3d.io.read_triangle_mesh(path)
+    final += chunk
+    del chunk
 
-            wmin = torch.tensor(cmin, device="cuda").float() * VOXEL_SIZE
-            wmax = torch.tensor(cmax, device="cuda").float() * VOXEL_SIZE
-            mask = ((xyz_t >= wmin) & (xyz_t <= wmax)).all(dim=1)
-            chunk_pts = xyz_t[mask]
+print(f"Final: {len(final.vertices):,} vertices, "
+      f"{len(final.triangles):,} faces")
 
-            if chunk_pts.shape[0] < 2000:
-                continue
-
-            pts_np    = chunk_pts.cpu().numpy()
-            planarity = compute_planarity(pts_np)
-            print(f"Chunk [{ix:4d},{iy:4d},{iz:4d}]: "
-                  f"{chunk_pts.shape[0]:>8,} pts | planarity={planarity:.4f}")
+o3d.io.write_triangle_mesh("outputs/reconstruction_optimized.ply", final)
+print("Saved → outputs/reconstruction_optimized.ply")
