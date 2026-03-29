@@ -30,13 +30,14 @@ centroid = xyz.mean(axis=0)
 xyz -= centroid
 print(f"Loaded {len(xyz):,} points.")
 
-# ── 2. High accuracy normal estimation ────────────────────────────────────
-print("Loading point cloud with normals from PLY...")
+# ── 2. Load normals from PLY ──────────────────────────────────────────────
+print("Loading normals from PLY...")
 pcd = o3d.io.read_point_cloud(
     "/work/scratch/oscipal/2026-03-09_16.19.44/pointcloud.ply"
 )
 normals = np.asarray(pcd.normals).astype(np.float32)
-print("Normals loaded — no estimation needed.")
+del pcd
+print("Normals loaded.")
 
 # ── 3. Assign points to fine chunks ───────────────────────────────────────
 VOXEL_SIZE = 0.1
@@ -89,7 +90,7 @@ n_planar  = sum(1 for c in chunk_data.values() if c['is_planar'])
 n_complex = sum(1 for c in chunk_data.values() if not c['is_planar'])
 print(f"Planar chunks: {n_planar}, Complex chunks: {n_complex}")
 
-# ── 5. Region growing ─────────────────────────────────────────────────────
+# ── 5. Get neighbours ─────────────────────────────────────────────────────
 def get_neighbours(key):
     ix, iy, iz = key
     return [
@@ -98,11 +99,15 @@ def get_neighbours(key):
         (ix, iy, iz+1), (ix, iy, iz-1),
     ]
 
-print("Running region growing...")
-visited = set()
-regions = []  # list of (region_keys, is_planar)
+# ── 6. Region growing — complex first, absorb planar neighbours ───────────
+print("Growing complex regions (absorbing adjacent planar)...")
+visited  = set()
+regions  = []  # list of (chunk_keys, is_complex)
 
-for start_key in chunk_data:
+# Pass 1 — grow complex regions, greedily absorbing all planar neighbours
+complex_keys = [k for k, v in chunk_data.items() if not v['is_planar']]
+
+for start_key in complex_keys:
     if start_key in visited:
         continue
 
@@ -116,109 +121,83 @@ for start_key in chunk_data:
 
         visited.add(key)
         region.append(key)
+
+        for nb_key in get_neighbours(key):
+            if nb_key in visited or nb_key not in chunk_data:
+                continue
+
+            nb = chunk_data[nb_key]
+            cur = chunk_data[key]
+
+            if not cur['is_planar'] and not nb['is_planar']:
+                # Both complex — always merge
+                queue.append(nb_key)
+            elif not cur['is_planar'] and nb['is_planar']:
+                # Complex touching planar — absorb planar
+                queue.append(nb_key)
+            elif cur['is_planar'] and not nb['is_planar']:
+                # Absorbed planar touching complex — absorb that complex too
+                queue.append(nb_key)
+            elif cur['is_planar'] and nb['is_planar']:
+                # Two planar chunks inside a complex region — absorb if coplanar
+                # otherwise stop (different surface, e.g. wall vs floor)
+                if (normals_similar(cur['normal'], nb['normal']) and
+                        planes_coplanar(cur['normal'], cur['d'],
+                                        xyz[nb['indices']])):
+                    queue.append(nb_key)
+
+    if region:
+        regions.append((region, True))  # True = complex unit
+
+print(f"Complex units: {len(regions)}")
+
+# Pass 2 — grow remaining planar regions from unvisited planar chunks
+print("Growing remaining planar regions...")
+planar_keys = [k for k, v in chunk_data.items()
+               if v['is_planar'] and k not in visited]
+
+for start_key in planar_keys:
+    if start_key in visited:
+        continue
+
+    region = []
+    queue  = [start_key]
+
+    while queue:
+        key = queue.pop()
+        if key in visited or key not in chunk_data:
+            continue
+        if not chunk_data[key]['is_planar']:
+            continue  # should not happen but safety check
+
+        visited.add(key)
+        region.append(key)
         chunk = chunk_data[key]
 
         for nb_key in get_neighbours(key):
             if nb_key in visited or nb_key not in chunk_data:
                 continue
             nb = chunk_data[nb_key]
+            if not nb['is_planar']:
+                continue  # already absorbed into complex
 
-            if chunk['is_planar'] and nb['is_planar']:
-                if (normals_similar(chunk['normal'], nb['normal']) and
-                        planes_coplanar(chunk['normal'], chunk['d'],
-                                        xyz[nb['indices']])):
-                    queue.append(nb_key)
-
-            elif not chunk['is_planar'] and not nb['is_planar']:
+            if (normals_similar(chunk['normal'], nb['normal']) and
+                    planes_coplanar(chunk['normal'], chunk['d'],
+                                    xyz[nb['indices']])):
                 queue.append(nb_key)
 
-    is_planar_region = all(chunk_data[k]['is_planar'] for k in region)
-    regions.append((region, is_planar_region))
+    if region:
+        regions.append((region, False))  # False = planar-only unit
 
-print(f"Total regions: {len(regions)}")
-planar_regions  = [(r, p) for r, p in regions if p]
-complex_regions = [(r, p) for r, p in regions if not p]
-print(f"Planar regions: {len(planar_regions)}, "
-      f"Complex regions: {len(complex_regions)}")
-
-# ── 6. Build reconstruction units ────────────────────────────────────────
-# Each reconstruction unit is a set of fine chunk keys that get
-# reconstructed together in one NKSR call.
-# Strategy:
-# - Complex region + ALL adjacent planar chunks → one unit
-# - Small/medium planar regions adjacent to complex → absorbed
-# - Large isolated planar regions → own unit
-
-SMALL_PLANAR_PTS  = 500
-MEDIUM_PLANAR_PTS = 2000
-
-# Map each chunk key to its region index
-chunk_to_region = {}
-for region_idx, (region_keys, is_planar) in enumerate(regions):
-    for key in region_keys:
-        chunk_to_region[key] = region_idx
-
-# Find which planar regions are adjacent to each complex region
-complex_adjacent_planar = defaultdict(set)  # complex_region_idx -> set of planar region idxs
-for region_idx, (region_keys, is_planar) in enumerate(regions):
-    if is_planar:
-        continue
-    for key in region_keys:
-        for nb_key in get_neighbours(key):
-            if nb_key not in chunk_data:
-                continue
-            nb_region_idx = chunk_to_region.get(nb_key)
-            if nb_region_idx is None:
-                continue
-            if regions[nb_region_idx][1]:  # neighbour is planar
-                complex_adjacent_planar[region_idx].add(nb_region_idx)
-
-# Determine which planar regions get absorbed into complex units
-absorbed_planar = set()  # planar region indices that are absorbed
-
-reconstruction_units = []  # list of (chunk_keys_set, label)
-
-# Build complex units — each complex region + its adjacent planar regions
-for region_idx, (region_keys, is_planar) in enumerate(regions):
-    if is_planar:
-        continue
-
-    unit_keys = set(region_keys)
-    adjacent_planar_idxs = complex_adjacent_planar[region_idx]
-
-    for planar_idx in adjacent_planar_idxs:
-        planar_keys, _ = regions[planar_idx]
-        n_pts = sum(chunk_data[k]['n_pts'] for k in planar_keys)
-
-        # Always absorb small and medium planar regions
-        # Also absorb large ones that are adjacent to this complex region
-        unit_keys.update(planar_keys)
-        absorbed_planar.add(planar_idx)
-
-    reconstruction_units.append((unit_keys, f"complex_{region_idx:05d}"))
-
-# Build planar-only units for non-absorbed planar regions
-for region_idx, (region_keys, is_planar) in enumerate(regions):
-    if not is_planar:
-        continue
-    if region_idx in absorbed_planar:
-        continue
-
-    n_pts = sum(chunk_data[k]['n_pts'] for k in region_keys)
-    reconstruction_units.append((set(region_keys),
-                                  f"planar_{region_idx:05d}"))
-
-print(f"Reconstruction units: {len(reconstruction_units)}")
-print(f"  Complex+planar units: "
-      f"{sum(1 for _, l in reconstruction_units if 'complex' in l)}")
-print(f"  Planar-only units: "
-      f"{sum(1 for _, l in reconstruction_units if 'planar' in l)}")
+print(f"Total reconstruction units: {len(regions)}")
+print(f"  Complex units: {sum(1 for _, c in regions if c)}")
+print(f"  Planar-only units: {sum(1 for _, c in regions if not c)}")
 
 # ── 7. Reconstruction helpers ─────────────────────────────────────────────
-reconstructor  = nksr.Reconstructor(torch.device("cuda:0"))
-MIN_PTS        = 200
-chunk_files    = []
-chunk_counter  = [0]
+reconstructor = nksr.Reconstructor(torch.device("cuda:0"))
+MIN_PTS       = 200
+chunk_files   = []
+chunk_counter = [0]
 
 def run_nksr(pts_np, nrm_np, clr_np, detail, mise, vox_size):
     chunk_pts = torch.from_numpy(pts_np).float().cuda()
@@ -271,7 +250,6 @@ def smart_subsample(pts_np, nrm_np, clr_np, max_pts, vox_size):
             if clr_np is not None else None)
 
 def save_mesh(verts, faces, mesh, label):
-    """Save without trimming — no boundary artifacts."""
     chunk_mesh = o3d.geometry.TriangleMesh()
     chunk_mesh.vertices  = o3d.utility.Vector3dVector(verts)
     chunk_mesh.triangles = o3d.utility.Vector3iVector(faces)
@@ -287,8 +265,7 @@ def save_mesh(verts, faces, mesh, label):
 # ── 8. Reconstruct all units ──────────────────────────────────────────────
 print("\nReconstructing units...")
 
-for unit_idx, (unit_keys, label) in enumerate(reconstruction_units):
-    # Collect all point indices in this unit
+for unit_idx, (unit_keys, is_complex) in enumerate(regions):
     all_indices = np.concatenate([chunk_data[k]['indices']
                                    for k in unit_keys])
     unit_pts = xyz[all_indices]
@@ -299,28 +276,24 @@ for unit_idx, (unit_keys, label) in enumerate(reconstruction_units):
     unit_nrm = normals[all_indices]
     unit_clr = colors[all_indices] if has_color else None
 
-    is_complex_unit = 'complex' in label
-    n_pts = len(unit_pts)
-
-    # Adaptive quality
-    if is_complex_unit:
+    if is_complex:
         detail, mise, vox_size = 1.0, 2, VOXEL_SIZE * 0.5
+        label = f"complex_{unit_idx:05d}"
     else:
-        # Planar-only unit
         max_residual = np.max([chunk_data[k]['residual']
                                 for k in unit_keys])
         if max_residual < 0.02:
             detail, mise, vox_size = 0.3, 1, VOXEL_SIZE * 2.0
         else:
             detail, mise, vox_size = 0.5, 1, VOXEL_SIZE * 1.5
+        label = f"planar_{unit_idx:05d}"
 
-    print(f"  Unit {unit_idx+1}/{len(reconstruction_units)} "
-          f"[{'complex+planar' if is_complex_unit else 'planar'}]: "
-          f"{n_pts:,} pts | vox={vox_size:.3f}")
+    print(f"  Unit {unit_idx+1}/{len(regions)} "
+          f"[{'complex' if is_complex else 'planar'}]: "
+          f"{len(unit_pts):,} pts | vox={vox_size:.3f}")
 
-    # Try full density first for complex units
-    # Subsample for planar-only units
-    if not is_complex_unit:
+    # Planar units get subsampled — full density not needed
+    if not is_complex:
         unit_pts, unit_nrm, unit_clr = smart_subsample(
             unit_pts, unit_nrm, unit_clr, 300_000, vox_size
         )
@@ -328,8 +301,7 @@ for unit_idx, (unit_keys, label) in enumerate(reconstruction_units):
     result = run_nksr(unit_pts, unit_nrm, unit_clr,
                       detail, mise, vox_size)
 
-    if result is None and is_complex_unit:
-        # OOM — progressively subsample
+    if result is None and is_complex:
         print(f"    OOM — subsampling...")
         for max_c in [500_000, 300_000, 150_000, 50_000]:
             s_pts, s_nrm, s_clr = smart_subsample(
