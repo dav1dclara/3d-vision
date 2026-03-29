@@ -1,0 +1,52 @@
+# config.yaml
+
+# ── File paths ────────────────────────────────────────────────────────────
+paths:
+  pointcloud_las: "/work/scratch/oscipal/2026-03-09_16.19.44/pointcloud.las"
+  pointcloud_ply: "/work/scratch/oscipal/2026-03-09_16.19.44/pointcloud.ply"
+  output_dir: "outputs"
+
+# ── Voxel sizes ───────────────────────────────────────────────────────────
+voxel:
+  base_size: 0.1          # base voxel size in metres (VOXEL_SIZE)
+  fine_chunk_size: 0.5    # fine chunk size for segmentation in metres (FINE_SIZE)
+
+# ── Planarity detection ───────────────────────────────────────────────────
+planarity:
+  residual_threshold: 0.05      # below this = planar chunk
+  angle_threshold_deg: 15.0     # max angle between normals to merge planar chunks
+  coplanar_dist_threshold: 0.1  # max point-to-plane distance to merge planar chunks
+  min_points_per_chunk: 20      # min points for a chunk to be considered
+
+# ── Reconstruction quality ────────────────────────────────────────────────
+reconstruction:
+  # Complex units (objects, furniture, people)
+  complex_detail_level: 1.0
+  complex_mise_iter: 2
+  complex_voxel_factor: 0.5     # multiplied by base_size → 0.05m
+
+  # Planar-only units
+  planar_very_flat_threshold: 0.02    # residual below this = very flat
+  planar_very_flat_detail: 0.3
+  planar_very_flat_mise_iter: 1
+  planar_very_flat_voxel_factor: 2.0  # → 0.2m
+
+  planar_flat_detail: 0.5
+  planar_flat_mise_iter: 1
+  planar_flat_voxel_factor: 1.5       # → 0.15m
+
+# ── Subsampling ───────────────────────────────────────────────────────────
+subsampling:
+  planar_max_pts: 300_000       # max points for planar reconstruction
+  complex_oom_fallback_levels:  # progressively tried on OOM
+    - 500_000
+    - 300_000
+    - 150_000
+    - 50_000
+  complex_last_resort_pts: 100_000   # final fallback point count
+  complex_last_resort_voxel_factor: 1.0  # → base_size
+
+# ── Misc ──────────────────────────────────────────────────────────────────
+misc:
+  min_pts_per_unit: 200         # skip reconstruction units smaller than this
+  gpu_device: "cuda:0"
