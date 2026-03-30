@@ -9,7 +9,7 @@ import yaml
 from collections import defaultdict
 
 # ── Load config ───────────────────────────────────────────────────────────
-with open("config.yaml") as f:
+with open("configs/config.yaml") as f:
     cfg = yaml.safe_load(f)
 
 POINTCLOUD_LAS = cfg['paths']['pointcloud_las']
@@ -376,7 +376,7 @@ for i, path in enumerate(chunk_files):
     merged += chunk
     del chunk
 
-out_path = os.path.join(OUTPUT_DIR, "reconstruction.ply")
+out_path = os.path.join(OUTPUT_DIR, "nksr_reconstruction.ply")
 o3d.io.write_triangle_mesh(out_path, merged)
 print(f"Saved: {len(merged.vertices):,} vertices, "
       f"{len(merged.triangles):,} faces → {out_path}")
