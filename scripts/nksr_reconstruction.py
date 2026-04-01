@@ -9,7 +9,7 @@ import yaml
 from collections import defaultdict
 
 # ── Load config ───────────────────────────────────────────────────────────
-with open("configs/config.yaml") as f:
+with open("configs/nksr_config.yaml") as f:
     cfg = yaml.safe_load(f)
 
 POINTCLOUD_LAS = cfg['paths']['pointcloud_las']
