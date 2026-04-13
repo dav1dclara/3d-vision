@@ -1,6 +1,9 @@
 import open3d as o3d
 from pathlib import Path
 from pcdmeshing import run_block_meshing
+from datetime import datetime
+
+start = datetime.now()
 
 # Load your PLY (has xyz + normals + RGB)
 print("Loading point cloud...")
@@ -28,3 +31,5 @@ print(f"Mesh: {len(mesh.vertices):,} vertices, {len(mesh.triangles):,} triangles
 out_path = "outputs/pcd_reconstruction.ply"
 o3d.io.write_triangle_mesh(out_path, mesh)
 print(f"Saved to {out_path}")
+
+print(f"\nTotal time: {datetime.now() - start}")
