@@ -23,7 +23,7 @@ Create a conda environment, then install the dependencies:
 ```bash
 conda create -n 3DV --file requirements.txt
 conda activate 3DV
-echo "/work/courses/3dv/team13/miniconda13/envs/nksr/lib/python3.10/site-packages/" > ~/miniconda3/envs/3dv/lib/python3.10/site-packages/shared_env.pth
+echo "/work/courses/3dv/team13/miniconda13/envs/nksr/lib/python3.10/site-packages/" > ~/miniconda3/envs/3DV/lib/python3.10/site-packages/shared_env.pth
 ```
 
 Install the pre-commit hooks for automatic code formatting and linting on each commit:

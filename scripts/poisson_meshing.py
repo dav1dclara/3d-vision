@@ -3,6 +3,9 @@ import open3d as o3d
 from scipy.spatial import KDTree
 import time
 import yaml
+from datetime import datetime
+
+start = datetime.now()
 
 # ── Load config ───────────────────────────────────────────────────────
 with open("configs/poisson_config.yaml", "r") as f:
@@ -48,3 +51,5 @@ mesh.vertex_colors = o3d.utility.Vector3dVector(colors[idx])
 # ── 5. Save ───────────────────────────────────────────────────────────
 o3d.io.write_triangle_mesh(cfg["out_path"], mesh)
 print(f"Saved to {cfg['out_path']}")
+
+print(f"\nTotal time: {datetime.now() - start}")

@@ -9,11 +9,11 @@ paths:
 # ── Voxel sizes ───────────────────────────────────────────────────────────
 voxel:
   base_size: 0.1          # base voxel size in metres (VOXEL_SIZE)
-  fine_chunk_size: 0.5    # fine chunk size for segmentation in metres (FINE_SIZE)
+  fine_chunk_size: 0.25    # fine chunk size for segmentation in metres (FINE_SIZE)
 
 # ── Planarity detection ───────────────────────────────────────────────────
 planarity:
-  residual_threshold: 0.05      # below this = planar chunk
+  residual_threshold: 0.1      # below this = planar chunk
   angle_threshold_deg: 15.0     # max angle between normals to merge planar chunks
   coplanar_dist_threshold: 0.1  # max point-to-plane distance to merge planar chunks
   min_points_per_chunk: 20      # min points for a chunk to be considered
@@ -22,18 +22,21 @@ planarity:
 reconstruction:
   # Complex units (objects, furniture, people)
   complex_detail_level: 1
-  complex_mise_iter: 2
-  complex_voxel_factor: 0.5     # multiplied by base_size → 0.05m
+  complex_mise_iter: 1
+  complex_voxel_factor: 0.15     # multiplied by base_size → 0.05m
+  complex_max_extent_m: 2.0    # max extent of a unit to be considered complex (otherwise planar)
+  complex_boundary_inset_m: 0.1
 
   # Planar-only units
   planar_very_flat_threshold: 0.02    # residual below this = very flat
   planar_very_flat_detail: 0.3
   planar_very_flat_mise_iter: 1
-  planar_very_flat_voxel_factor: 2.0  # → 0.2m
+  planar_very_flat_voxel_factor: 2  # → 0.2m
 
   planar_flat_detail: 0.5
   planar_flat_mise_iter: 1
   planar_flat_voxel_factor: 1.5       # → 0.15m
+  planar_overlap_m: 0.3
 
 # ── Subsampling ───────────────────────────────────────────────────────────
 subsampling:
