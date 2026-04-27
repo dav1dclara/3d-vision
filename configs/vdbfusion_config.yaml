@@ -1,0 +1,40 @@
+# Experimental VDBFusion config
+
+input:
+  # Supported values: "las" or "kitti"
+  dataset_type: "las"
+
+  # LAS mode
+  las_path: "/work/scratch/vpacheco/2026-03-09_16.19.44/pointcloud.las"
+
+  # KITTI mode
+  kitti_root_dir: "./kitti-odometry/dataset"
+  sequence: 0
+
+fusion:
+  voxel_size: 0.10
+  sdf_trunc: 0.30
+  space_carving: false
+
+  # Mesh extraction
+  fill_holes: true
+  min_weight: 1.0
+
+preprocess:
+  # Used in KITTI mode only
+  min_range: 2.0
+  max_range: 70.0
+  max_scans: -1
+  scan_stride: 1
+
+static_mode:
+  # Used in LAS mode only
+  chunk_size: 200000
+  origin_offset: [0.0, 0.0, 1.8]
+
+  # If provided, this fixed origin is used for all chunks.
+  # fixed_origin: [0.0, 0.0, 0.0]
+
+output:
+  output_dir: "outputs"
+  map_name: "vdbfusion_reconstruction"

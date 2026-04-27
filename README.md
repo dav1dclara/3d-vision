@@ -6,6 +6,7 @@
 - [fVDB](https://github.com/openvdb/fvdb-core)
 - [PCD Meshing](https://github.com/cvg/pcdmeshing)
 - [POCO](https://github.com/valeoai/POCO)
+- [VDBFusion](https://github.com/PRBonn/vdbfusion)
 
 ## Setup
 
@@ -87,3 +88,25 @@ The pipeline produces a colored triangle mesh in PLY format with per-vertex RGB 
 ```bash
 python scripts/view_mesh.py outputs/reconstruction.ply
 ```
+
+## VDBFusion Experiment
+
+This repository now includes an experimental VDBFusion pipeline inspired by the KITTI odometry notebook.
+
+Install VDBFusion first:
+```bash
+pip install vdbfusion
+```
+
+Edit `configs/vdbfusion_config.yaml` and choose one mode:
+- `dataset_type: "las"` for your LAS point cloud (chunked pseudo-scans)
+- `dataset_type: "kitti"` for KITTI odometry data
+
+Run:
+```bash
+python scripts/vdbfusion_reconstruction.py --config configs/vdbfusion_config.yaml
+```
+
+Outputs:
+- `outputs/vdbfusion_reconstruction.ply`
+- `outputs/vdbfusion_reconstruction.vdb`
