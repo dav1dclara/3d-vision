@@ -1,0 +1,46 @@
+# config.yaml
+
+paths:
+  pointcloud_las: "/work/scratch/oscipal/2026-03-09_16.19.44/pointcloud.las"
+  pointcloud_ply: "/work/scratch/oscipal/2026-03-09_16.19.44/pointcloud.ply"
+  output_dir: "outputs"
+
+voxel:
+  base_size: 0.1
+  fine_chunk_size: 0.25
+
+planarity:
+  residual_threshold: 0.05
+  angle_threshold_deg: 15.0
+  coplanar_dist_threshold: 0.1
+  min_points_per_chunk: 20
+
+reconstruction:
+  complex_detail_level: 1.0
+  complex_mise_iter: 1
+  complex_voxel_factor: 0.1        # fine voxels for small complex units
+  complex_max_extent_m: 8.0        # units larger than this are "large"
+  complex_large_voxel_factor: 0.25  # coarser voxels for large complex units
+
+  planar_very_flat_threshold: 0.02
+  planar_very_flat_detail: 0.3
+  planar_very_flat_mise_iter: 1
+  planar_very_flat_voxel_factor: 2.0
+
+  planar_flat_detail: 0.5
+  planar_flat_mise_iter: 1
+  planar_flat_voxel_factor: 1.5
+
+subsampling:
+  planar_max_pts: 300000
+  complex_oom_fallback_levels:
+    - 500000
+    - 300000
+    - 150000
+    - 50000
+  complex_last_resort_pts: 100000
+  complex_last_resort_voxel_factor: 1.0
+
+misc:
+  min_pts_per_unit: 200
+  gpu_device: "cuda:0"

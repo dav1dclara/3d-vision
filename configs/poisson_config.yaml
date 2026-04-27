@@ -1,0 +1,22 @@
+# config_poisson.yaml
+
+# ── Input / Output ────────────────────────────────────────────────────
+ply_path: "/work/scratch/oscipal/2026-03-09_16.19.44/pointcloud.ply"
+out_path: "outputs/poisson_reconstruction.ply"
+
+# ── Poisson Reconstruction ────────────────────────────────────────────
+# Octree depth — controls resolution
+# 10 → ~0.1m, 11 → ~0.05m (matches NKSR complex), 12 → ~0.025m (slow)
+depth: 12
+width: 0
+scale: 1.1
+linear_fit: false
+n_threads: -1  # -1 = all cores
+
+# ── Density Trimming ──────────────────────────────────────────────────
+# Remove vertices below this density percentile (trims hallucinated exterior)
+# 5 = conservative, 15-20 = aggressive
+density_percentile: 5
+
+# ── Color Transfer ────────────────────────────────────────────────────
+color_knn: 1
