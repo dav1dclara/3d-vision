@@ -1,0 +1,27 @@
+input:
+  las_path: "/work/scratch/vpacheco/2026-03-09_16.19.44/pointcloud.las"
+
+fusion:
+  voxel_size: 0.10
+  sdf_trunc: 0.30
+  space_carving: false
+  fill_holes: true
+  min_weight: 1.0
+
+preprocess:
+  downsample_voxel_size: 0.0
+
+static_mode:
+  fixed_origin: [0.0, 0.0, 2.0]
+
+output:
+  output_dir: "../outputs"
+  map_name: "vdbfusion_reconstruction"
+
+sweep:
+  enabled: true
+  output_subdir: "sweeps"
+  min_weight_values: [0.0, 0.5]
+  downsample_voxel_sizes: [0.0, 0.01]
+  sdf_trunc_values: [0.025, 0.05]
+  voxel_size_values: [0.01, 0.02]
