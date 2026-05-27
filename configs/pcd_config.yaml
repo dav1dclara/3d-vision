@@ -1,0 +1,19 @@
+# pcd_config.yaml
+
+# ── File paths ────────────────────────────────────────────────────────────
+paths:
+  pointcloud_ply: "/work/courses/3dv/team13/2026-03-09_16.19.44/pointcloud.ply"
+  output_dir: "/work/scratch/oscipal/outputs"
+  output_mesh: "pcd_reconstruction_small_scene.ply"
+
+# ── Block meshing ─────────────────────────────────────────────────────────
+meshing:
+  voxel_size: 20        # block size in metres
+  margin_seam: 0.2
+  margin_discard: 0.2
+  num_parallel: 10
+
+  # Triangle quality filters
+  max_edge_length: 0.5  # reject triangles with edges > this (metres)
+  max_visibility: 10
+  use_visibility: false

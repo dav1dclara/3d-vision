@@ -2,9 +2,10 @@
 
 # ── File paths ────────────────────────────────────────────────────────────
 paths:
-  pointcloud_las: "/work/scratch/oscipal/2026-03-09_16.19.44/pointcloud.las"
-  pointcloud_ply: "/work/scratch/oscipal/2026-03-09_16.19.44/pointcloud.ply"
-  output_dir: "outputs"
+  pointcloud_las: "/work/courses/3dv/team13/2026-05-06_17.33.13/3dv_largeScale-registered.las"  # set to null to use PLY only
+  pointcloud_ply: "/work/courses/3dv/team13/2026-05-06_17.33.13/3dv_largeScale-registered.ply"
+  output_dir: "/work/courses/3dv/team13/outputs"
+  output_mesh: "nksr_reconstruction.ply"
 
 # ── Voxel sizes ───────────────────────────────────────────────────────────
 voxel:
@@ -25,6 +26,7 @@ reconstruction:
   complex_mise_iter: 1
   complex_voxel_factor: 0.15     # multiplied by base_size → 0.05m
   complex_max_extent_m: 2.0    # max extent of a unit to be considered complex (otherwise planar)
+  complex_max_pts: 1_000_000  # max points per complex region
   complex_boundary_inset_m: 0.1
 
   # Planar-only units

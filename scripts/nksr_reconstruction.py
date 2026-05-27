@@ -18,6 +18,7 @@ with open("configs/nksr_config.yaml") as f:
 POINTCLOUD_LAS = cfg['paths']['pointcloud_las']
 POINTCLOUD_PLY = cfg['paths']['pointcloud_ply']
 OUTPUT_DIR     = cfg['paths']['output_dir']
+OUTPUT_MESH    = cfg['paths']['output_mesh']
 
 VOXEL_SIZE  = cfg['voxel']['base_size']
 FINE_SIZE   = cfg['voxel']['fine_chunk_size']
@@ -54,28 +55,50 @@ os.makedirs(CHUNKS_DIR, exist_ok=True)
 
 # ── 1. Load point cloud ───────────────────────────────────────────────────
 print("Loading point cloud...")
-las = laspy.read(POINTCLOUD_LAS)
-xyz = np.vstack([las.x, las.y, las.z]).T.astype(np.float32)
+if POINTCLOUD_LAS:
+    las = laspy.read(POINTCLOUD_LAS)
+    xyz = np.vstack([las.x, las.y, las.z]).T  # float64 for precision
 
-if hasattr(las, 'red') and hasattr(las, 'green') and hasattr(las, 'blue'):
-    colors = np.vstack([las.red, las.green, las.blue]).T.astype(np.float32)
-    colors /= 65535.0
-    has_color = True
-    print("Color data found.")
+    if hasattr(las, 'red') and hasattr(las, 'green') and hasattr(las, 'blue'):
+        colors = np.vstack([las.red, las.green, las.blue]).T.astype(np.float32)
+        colors /= 65535.0
+        has_color = True
+        print("Color data found.")
+    else:
+        has_color = False
+        print("No color data found.")
+
+    centroid = xyz.mean(axis=0)
+    xyz -= centroid
+    xyz = xyz.astype(np.float32)
+
+    print(f"Loaded {len(xyz):,} points.")
+    print("Loading normals from PLY...")
+    pcd = o3d.io.read_point_cloud(POINTCLOUD_PLY)
+    normals = np.asarray(pcd.normals).astype(np.float32)
+    del pcd
+    print("Normals loaded.")
 else:
-    has_color = False
-    print("No color data found.")
+    print("No LAS file configured — loading XYZ, normals and colors from PLY...")
+    pcd = o3d.io.read_point_cloud(POINTCLOUD_PLY)
+    xyz = np.asarray(pcd.points)  # float64
 
-centroid = xyz.mean(axis=0)
-xyz -= centroid
-print(f"Loaded {len(xyz):,} points.")
+    centroid = xyz.mean(axis=0)
+    xyz -= centroid
+    xyz = xyz.astype(np.float32)
 
-# ── 2. Load normals from PLY ──────────────────────────────────────────────
-print("Loading normals from PLY...")
-pcd = o3d.io.read_point_cloud(POINTCLOUD_PLY)
-normals = np.asarray(pcd.normals).astype(np.float32)
-del pcd
-print("Normals loaded.")
+    normals = np.asarray(pcd.normals).astype(np.float32)
+
+    if pcd.has_colors():
+        colors = np.asarray(pcd.colors).astype(np.float32)
+        has_color = True
+        print("Color data found.")
+    else:
+        has_color = False
+        print("No color data found.")
+
+    del pcd
+    print(f"Loaded {len(xyz):,} points.")
 
 # ── 3. Assign points to fine chunks ───────────────────────────────────────
 print("Assigning points to fine chunks...")
@@ -124,6 +147,9 @@ for key, indices in point_chunks.items():
 n_planar  = sum(1 for c in chunk_data.values() if c['is_planar'])
 n_complex = sum(1 for c in chunk_data.values() if not c['is_planar'])
 print(f"Planar chunks: {n_planar}, Complex chunks: {n_complex}")
+residuals = np.array([c['residual'] for c in chunk_data.values()])
+for pct in [50, 75, 90, 95, 99, 100]:
+    print(f"  residual p{pct}: {np.percentile(residuals, pct):.4f}")
 
 # ── 5. Neighbours ─────────────────────────────────────────────────────────
 def get_neighbours(key):
@@ -134,7 +160,8 @@ def get_neighbours(key):
         (ix, iy, iz+1), (ix, iy, iz-1),
     ]
 
-MAX_EXTENT_CHUNKS = int(COMPLEX_MAX_EXTENT_M / FINE_SIZE)
+MAX_EXTENT_CHUNKS  = int(COMPLEX_MAX_EXTENT_M / FINE_SIZE)
+COMPLEX_MAX_PTS    = cfg['reconstruction']['complex_max_pts']
 
 # ── 6. Region growing ─────────────────────────────────────────────────────
 print("Growing complex regions (absorbing adjacent planar)...")
@@ -147,10 +174,11 @@ for start_key in complex_keys:
     if start_key in visited:
         continue
 
-    region   = []
-    queue    = [start_key]
-    bbox_min = np.array(start_key)
-    bbox_max = np.array(start_key)
+    region    = []
+    queue     = [start_key]
+    bbox_min  = np.array(start_key)
+    bbox_max  = np.array(start_key)
+    total_pts = 0
 
     while queue:
         key = queue.pop()
@@ -169,8 +197,12 @@ for start_key in complex_keys:
             bbox_min = new_min
             bbox_max = new_max
 
+        if total_pts + cur['n_pts'] > COMPLEX_MAX_PTS:
+            continue
+
         visited.add(key)
         region.append(key)
+        total_pts += cur['n_pts']
 
         for nb_key in get_neighbours(key):
             if nb_key in visited or nb_key not in chunk_data:
@@ -262,6 +294,7 @@ chunk_files   = []
 chunk_counter = [0]
 
 def run_nksr(pts_np, nrm_np, clr_np, detail, mise, vox_size):
+    global reconstructor
     chunk_pts = torch.from_numpy(pts_np).float().cuda()
     chunk_nrm = torch.from_numpy(nrm_np).float().cuda()
     chunk_clr = (torch.from_numpy(clr_np).float().cuda()
@@ -283,11 +316,20 @@ def run_nksr(pts_np, nrm_np, clr_np, detail, mise, vox_size):
         if len(verts) == 0 or len(faces) == 0:
             return None
         return verts, faces, mesh
-    except (torch.cuda.OutOfMemoryError, AttributeError, RuntimeError) as e:
-        print(f"      NKSR failed: {e}")
-        return None
-    finally:
+    except torch.cuda.OutOfMemoryError as e:
+        print(f"      NKSR OOM: {e}")
         torch.cuda.empty_cache()
+        return None
+    except (AttributeError, RuntimeError) as e:
+        print(f"      NKSR failed: {e}")
+        # Fatal CUDA errors corrupt the device context — reinitialize to recover
+        try:
+            torch.cuda.empty_cache()
+            reconstructor = nksr.Reconstructor(torch.device(GPU_DEVICE))
+            print("      Reconstructor reinitialized.")
+        except Exception as reinit_err:
+            print(f"      Reinit failed: {reinit_err}")
+        return None
 
 def smart_subsample(pts_np, nrm_np, clr_np, max_pts, vox_size):
     if len(pts_np) <= max_pts:
@@ -327,26 +369,16 @@ def save_mesh(verts, faces, mesh_obj, label, used_indices=None):
     o3d.io.write_triangle_mesh(chunk_path, chunk_mesh)
     return chunk_path
 
-def compute_planar_trim_bbox(core_min, core_max):
-    """Trim planar mesh to exclude areas covered by complex units."""
-    trim_min = core_min.copy()
-    trim_max = core_max.copy()
-
+def mask_planar_verts(verts, core_min_w, core_max_w):
+    """Keep planar mesh vertices that are inside the core bbox and not inside
+    any complex unit's 3D bbox."""
+    in_core = np.all((verts >= core_min_w) & (verts <= core_max_w), axis=1)
     for cplx_min, cplx_max in complex_bboxes:
-        for axis in range(3):
-            span = core_max[axis] - core_min[axis]
-
-            # Complex unit overlaps our low end on this axis
-            overlap_lo = cplx_max[axis] - core_min[axis]
-            if 0 < overlap_lo < span:
-                trim_min[axis] = max(trim_min[axis], cplx_max[axis])
-
-            # Complex unit overlaps our high end on this axis
-            overlap_hi = core_max[axis] - cplx_min[axis]
-            if 0 < overlap_hi < span:
-                trim_max[axis] = min(trim_max[axis], cplx_min[axis])
-
-    return trim_min, trim_max
+        cplx_min_w = cplx_min + centroid
+        cplx_max_w = cplx_max + centroid
+        in_complex = np.all((verts >= cplx_min_w) & (verts <= cplx_max_w), axis=1)
+        in_core &= ~in_complex
+    return in_core
 
 # ── 8. Reconstruct all units ──────────────────────────────────────────────
 print("\nReconstructing units...")
@@ -426,12 +458,9 @@ for unit_idx, (unit_keys, is_complex) in enumerate(regions):
 
         verts, faces, mesh_obj = result
 
-        # Trim planar mesh — exclude areas covered by complex units
-        trim_min, trim_max = compute_planar_trim_bbox(core_min, core_max)
-        trim_min_w = trim_min + centroid
-        trim_max_w = trim_max + centroid
-
-        in_core  = np.all((verts >= trim_min_w) & (verts <= trim_max_w), axis=1)
+        core_min_w = core_min + centroid
+        core_max_w = core_max + centroid
+        in_core = mask_planar_verts(verts, core_min_w, core_max_w)
         face_mask  = (in_core[faces[:, 0]] &
                       in_core[faces[:, 1]] &
                       in_core[faces[:, 2]])
@@ -461,9 +490,10 @@ for i, path in enumerate(chunk_files):
     merged += chunk
     del chunk
 
-out_path = os.path.join(OUTPUT_DIR, "nksr_reconstruction.ply")
+out_path = os.path.join(OUTPUT_DIR, OUTPUT_MESH)
 o3d.io.write_triangle_mesh(out_path, merged)
 print(f"Saved: {len(merged.vertices):,} vertices, "
       f"{len(merged.triangles):,} faces → {out_path}")
 
+shutil.rmtree(CHUNKS_DIR)
 print(f"\nTotal time: {datetime.now() - start}")
