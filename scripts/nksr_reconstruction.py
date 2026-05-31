@@ -11,7 +11,6 @@ from collections import defaultdict
 from datetime import datetime
 
 start = datetime.now()
-t = {}   # stage timings
 
 # ── CLI args ──────────────────────────────────────────────────────────────
 parser = argparse.ArgumentParser(description="NKSR chunked reconstruction")
@@ -68,7 +67,6 @@ if os.path.exists(CHUNKS_DIR):
 os.makedirs(CHUNKS_DIR, exist_ok=True)
 
 # ── 1. Load point cloud ───────────────────────────────────────────────────
-t['start_load'] = datetime.now()
 print("Loading point cloud...")
 if POINTCLOUD_LAS:
     las = laspy.read(POINTCLOUD_LAS)
@@ -116,7 +114,6 @@ else:
     print(f"Loaded {len(xyz):,} points.")
 
 # ── 3. Assign points to fine chunks ───────────────────────────────────────
-t['start_voxelize'] = datetime.now()
 print("Assigning points to fine chunks...")
 chunk_indices = np.floor(xyz / FINE_SIZE).astype(np.int32)
 
@@ -142,7 +139,6 @@ def planes_coplanar(n1, d1, pts2):
     distances = np.abs(pts2 @ n1 - d1)
     return distances.mean() < COPLANAR_DIST_THRESHOLD
 
-t['start_svd'] = datetime.now()
 print("Computing per-chunk planarity...")
 chunk_data = {}
 for key, indices in point_chunks.items():
@@ -181,7 +177,6 @@ MAX_EXTENT_CHUNKS  = int(COMPLEX_MAX_EXTENT_M / FINE_SIZE)
 COMPLEX_MAX_PTS    = cfg['reconstruction']['complex_max_pts']
 
 # ── 6. Region growing ─────────────────────────────────────────────────────
-t['start_growing'] = datetime.now()
 print("Growing complex regions (absorbing adjacent planar)...")
 visited = set()
 regions = []
@@ -234,8 +229,11 @@ for start_key in complex_keys:
                 queue.append(nb_key)
             elif cur['is_planar'] and not nb['is_planar']:
                 queue.append(nb_key)
-            # planar-to-planar chaining removed: complex regions only absorb
-            # the immediately adjacent planar layer, not entire surfaces
+            elif cur['is_planar'] and nb['is_planar']:
+                if (normals_similar(cur['normal'], nb['normal']) and
+                        planes_coplanar(cur['normal'], cur['d'],
+                                        xyz[nb['indices']])):
+                    queue.append(nb_key)
 
     if region:
         regions.append((region, True))
@@ -385,22 +383,17 @@ def save_mesh(verts, faces, mesh_obj, label, used_indices=None):
     return chunk_path
 
 def mask_planar_verts(verts, core_min_w, core_max_w):
-    """Keep planar mesh vertices inside the core bbox, minus any complex unit
-    bbox that actually overlaps the planar core (avoids double surfaces at
-    complex/planar boundaries without over-trimming distant planar regions)."""
+    """Keep planar mesh vertices that are inside the core bbox and not inside
+    any complex unit's 3D bbox."""
     in_core = np.all((verts >= core_min_w) & (verts <= core_max_w), axis=1)
     for cplx_min, cplx_max in complex_bboxes:
         cplx_min_w = cplx_min + centroid
         cplx_max_w = cplx_max + centroid
-        # skip complex bboxes that don't overlap this planar unit's core at all
-        if np.any(cplx_max_w < core_min_w) or np.any(cplx_min_w > core_max_w):
-            continue
         in_complex = np.all((verts >= cplx_min_w) & (verts <= cplx_max_w), axis=1)
         in_core &= ~in_complex
     return in_core
 
 # ── 8. Reconstruct all units ──────────────────────────────────────────────
-t['start_reconstruction'] = datetime.now()
 print("\nReconstructing units...")
 
 for unit_idx, (unit_keys, is_complex) in enumerate(regions):
@@ -502,7 +495,6 @@ for unit_idx, (unit_keys, is_complex) in enumerate(regions):
             chunk_files.append(path)
 
 # ── 9. Merge all PLYs ─────────────────────────────────────────────────────
-t['start_merge'] = datetime.now()
 print(f"\nMerging {len(chunk_files)} files...")
 merged = o3d.geometry.TriangleMesh()
 for i, path in enumerate(chunk_files):
@@ -621,16 +613,4 @@ if args.save_voxel_grid:
     print(f"  {sum(1 for d in chunk_data.values() if not d['is_planar'])} complex (red), "
           f"{sum(1 for d in chunk_data.values() if d['is_planar'])} planar (blue)")
 
-t['end'] = datetime.now()
-
-def fmt(delta): return str(delta).split('.')[0]  # HH:MM:SS
-
-print("\n── Timing summary ───────────────────────────────────────────")
-print(f"  Load point cloud   : {fmt(t['start_voxelize']    - t['start_load'])}")
-print(f"  Voxelization       : {fmt(t['start_svd']         - t['start_voxelize'])}")
-print(f"  SVD / classification: {fmt(t['start_growing']    - t['start_svd'])}")
-print(f"  Region growing     : {fmt(t['start_reconstruction'] - t['start_growing'])}")
-print(f"  NKSR reconstruction: {fmt(t['start_merge']       - t['start_reconstruction'])}")
-print(f"  Merge & write      : {fmt(t['end']               - t['start_merge'])}")
-print(f"  ─────────────────────────────────────────────────────────")
-print(f"  Total              : {fmt(t['end'] - start)}")
+print(f"\nTotal time: {datetime.now() - start}")
