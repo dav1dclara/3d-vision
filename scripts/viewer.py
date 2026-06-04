@@ -108,9 +108,14 @@ print(f"Loading {args.input} ...")
 mesh = o3d.io.read_triangle_mesh(args.input)
 if len(mesh.triangles) > 0:
     print(f"  TriangleMesh: {len(mesh.vertices):,} vertices, {len(mesh.triangles):,} faces")
-    mesh.compute_vertex_normals()
     if args.voxel:
-        print("  (--voxel ignored for meshes)")
+        # vertex clustering = fast level-of-detail for smooth interaction
+        mesh = mesh.simplify_vertex_clustering(
+            voxel_size=args.voxel,
+            contraction=o3d.geometry.SimplificationContraction.Average)
+        print(f"  Simplified to {len(mesh.vertices):,} vertices, "
+              f"{len(mesh.triangles):,} faces (voxel={args.voxel}m)")
+    mesh.compute_vertex_normals()
     if not (args.original_color and mesh.has_vertex_colors()):
         mesh.paint_uniform_color(args.color)
     pcd = mesh
