@@ -11,6 +11,7 @@ Usage:
     python scripts/run_quality_assessment.py
 """
 
+import gc
 import tkinter as tk
 from tkinter import filedialog, messagebox, scrolledtext
 from contextlib import redirect_stdout, redirect_stderr
@@ -25,6 +26,7 @@ sys.path.insert(0, str(Path(__file__).parent.parent / "src"))
 from quality_assessment import (
     _load_ply_mesh,
     _load_ply_pointcloud,
+    _count_ply_points,
     evaluate_mesh,
 )
 
@@ -276,8 +278,7 @@ class QualityAssessmentGUI:
             filename = Path(path).name
             self.pc_label.config(text=filename, fg="black")
             try:
-                points = _load_ply_pointcloud(self.pointcloud_path)
-                self.point_count = len(points)
+                self.point_count = _count_ply_points(self.pointcloud_path)
                 if self.use_all_points_var.get():
                     self.sample_entry.config(state="normal")
                     self.sample_var.set(str(self.point_count))
@@ -347,8 +348,12 @@ class QualityAssessmentGUI:
             self._log("LOG:")
             self._log("    Loading data...")
             mesh = _load_ply_mesh(self.mesh_path)
-            points = _load_ply_pointcloud(self.pointcloud_path)
-            self.point_count = len(points)
+            # Pass max_points so only the needed sample is paged into RAM.
+            # When "use all points" is active, sample_size is None → full load.
+            points = _load_ply_pointcloud(self.pointcloud_path,
+                                          max_points=sample_size)
+            if self.point_count is None:
+                self.point_count = len(points)
             if self.use_all_points_var.get():
                 sample_size = self.point_count
                 self.sample_entry.config(state="normal")
@@ -383,6 +388,8 @@ class QualityAssessmentGUI:
             daemon=True,
         )
         thread.start()
+        del mesh, points  # release GUI-side references; thread holds the only copies now
+        gc.collect()
 
     def _set_controls_state(self, state):
         """Enable/disable controls while running."""
@@ -428,6 +435,7 @@ class QualityAssessmentGUI:
                     compute_watertightness=compute_watertightness,
                     compute_f_score=compute_f_score,
                     compute_visualization=compute_visualization,
+                    original_point_count=self.point_count,
                 )
             self._enqueue_log("")
 
@@ -435,9 +443,14 @@ class QualityAssessmentGUI:
             if self.last_plot is not None:
                 self._enqueue_log("Plot is ready. Click 'Open Plot' to view.")
 
+            del mesh, points
+            gc.collect()
+
             self.root.after(0, self._evaluation_success, results)
 
         except Exception as e:
+            del mesh, points
+            gc.collect()
             self._enqueue_log(f"ERROR: {e}")
             self.root.after(0, self._evaluation_failed, e)
 

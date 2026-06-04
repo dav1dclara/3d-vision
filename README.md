@@ -89,6 +89,33 @@ The pipeline produces a colored triangle mesh in PLY format with per-vertex RGB 
 python scripts/view_mesh.py outputs/reconstruction.ply
 ```
 
+## Mesh Quality Assessment
+
+Evaluate a reconstructed mesh against a LiDAR ground-truth point cloud. Computes cloud-to-mesh distances, residual distribution, aspect ratios, and produces an interactive 3D heatmap.
+
+### Running (GUI)
+```bash
+conda activate 3DV
+python scripts/run_quality_assessment.py
+```
+
+Select a mesh (`.ply`) and a point cloud (`.ply`), set the desired sample size and thresholds, then click **Evaluate**.
+
+### Notes on large point clouds
+The loader uses `numpy.memmap` to randomly sample the point cloud without loading the full file into RAM. Only the requested number of points (default 50 000) are paged in from disk — a 800 M-point cloud (≈ 20 GB) requires only ≈ 200 MB of physical RAM during loading.
+
+Distance queries use Open3D's `RaycastingScene` (C++ BVH, float32 internally) instead of trimesh, making the computation safe for meshes with tens of millions of faces.
+
+### Metrics
+| Metric | Description |
+|---|---|
+| Hausdorff / RMSE / MAE | Cloud-to-mesh distance statistics |
+| Residual distribution | % of points in Good / OK / Critical / Missing bands |
+| Mean aspect ratio | Triangle quality (sampled, 10 000 faces) |
+| Degenerate triangles | Faces with area < 1e-10 (extrapolated from sample) |
+| Watertight / Manifold | Topology check (optional, vectorized) |
+| F-Score | Bidirectional matching precision/recall (optional) |
+
 ## VDBFusion Experiment
 
 This repository now includes an experimental VDBFusion pipeline inspired by the KITTI odometry notebook.

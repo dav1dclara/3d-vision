@@ -3,3 +3,4 @@ pandas
 scipy
 trimesh
 plotly
+open3d

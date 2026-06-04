@@ -10,9 +10,11 @@ Main functions:
     - evaluate_multiple_meshes: Evaluate and compare multiple meshes
 """
 
+import gc
 import numpy as np
 import pandas as pd
 import trimesh
+import open3d as o3d
 from typing import Dict, List, Tuple, Optional
 import plotly.graph_objects as go
 from scipy.spatial import cKDTree
@@ -24,6 +26,102 @@ warnings.filterwarnings('ignore')
 # ============================================================================
 # Helper & I/O Functions (Internal)
 # ============================================================================
+
+_PLY_DTYPE_MAP = {
+    'char': 'i1', 'int8': 'i1',
+    'uchar': 'u1', 'uint8': 'u1',
+    'short': 'i2', 'int16': 'i2',
+    'ushort': 'u2', 'uint16': 'u2',
+    'int': 'i4', 'int32': 'i4',
+    'uint': 'u4', 'uint32': 'u4',
+    'float': 'f4', 'float32': 'f4',
+    'double': 'f8', 'float64': 'f8',
+}
+
+
+def _parse_ply_header(path: str) -> dict:
+    """Parse PLY header; return vertex count, format, data offset, and property list."""
+    result = {
+        'n_vertices': 0,
+        'is_binary': False,
+        'little_endian': True,
+        'data_offset': 0,
+        'properties': [],
+    }
+    in_vertex = False
+    with open(path, 'rb') as f:
+        for raw_line in f:
+            result['data_offset'] += len(raw_line)
+            line = raw_line.decode('ascii', errors='replace').strip()
+            if line == 'end_header':
+                break
+            elif line.startswith('format'):
+                fmt = line.split()[1]
+                result['is_binary'] = fmt.startswith('binary')
+                result['little_endian'] = fmt != 'binary_big_endian'
+            elif line.startswith('element vertex'):
+                result['n_vertices'] = int(line.split()[-1])
+                in_vertex = True
+            elif line.startswith('element') and in_vertex:
+                in_vertex = False
+            elif line.startswith('property') and in_vertex:
+                parts = line.split()
+                if parts[1] == 'list':
+                    raise ValueError("List properties in vertex element are not supported")
+                dt = _PLY_DTYPE_MAP.get(parts[1])
+                if dt is None:
+                    raise ValueError(f"Unknown PLY property type: {parts[1]}")
+                result['properties'].append((parts[2], dt))
+    return result
+
+
+def _count_ply_points(path: str) -> int:
+    """Read only the PLY header to get the vertex count (no data loaded)."""
+    return _parse_ply_header(path)['n_vertices']
+
+
+def _load_ply_pointcloud_sampled(path: str, max_points: int, seed: int = 42) -> np.ndarray:
+    """Memory-efficient random sampling of a large binary PLY point cloud via memmap.
+
+    Only touches the file pages for the sampled indices (~max_points * stride bytes),
+    avoiding the need to allocate the full point cloud in RAM.
+    """
+    header = _parse_ply_header(path)
+    if not header['is_binary']:
+        raise ValueError("Efficient sampling requires a binary PLY file")
+
+    n_vertices = header['n_vertices']
+    properties = header['properties']
+    prop_names = [name for name, _ in properties]
+    for coord in ('x', 'y', 'z'):
+        if coord not in prop_names:
+            raise ValueError(f"PLY file missing '{coord}' vertex property")
+
+    endian = '<' if header['little_endian'] else '>'
+    vertex_dtype = np.dtype([(name, endian + dt) for name, dt in properties])
+
+    # Map file to virtual address space — OS pages in only the accessed blocks
+    data = np.memmap(path, dtype=vertex_dtype, mode='r',
+                     offset=header['data_offset'], shape=(n_vertices,))
+
+    if n_vertices <= max_points:
+        result = np.column_stack([
+            np.asarray(data['x'], dtype=np.float64),
+            np.asarray(data['y'], dtype=np.float64),
+            np.asarray(data['z'], dtype=np.float64),
+        ])
+    else:
+        rng = np.random.default_rng(seed)
+        idx = np.sort(rng.choice(n_vertices, size=max_points, replace=False))
+        result = np.column_stack([
+            np.asarray(data['x'][idx], dtype=np.float64),
+            np.asarray(data['y'][idx], dtype=np.float64),
+            np.asarray(data['z'][idx], dtype=np.float64),
+        ])
+
+    del data
+    return result
+
 
 def _load_ply_mesh(mesh_path: str) -> trimesh.Trimesh:
     """Load a mesh from a PLY file."""
@@ -43,71 +141,95 @@ def _load_ply_mesh(mesh_path: str) -> trimesh.Trimesh:
     return mesh
 
 
-def _load_ply_pointcloud(pointcloud_path: str) -> np.ndarray:
-    """Load a point cloud from a PLY file."""
+def _load_ply_pointcloud(pointcloud_path: str,
+                         max_points: Optional[int] = None) -> np.ndarray:
+    """Load a point cloud from a PLY file.
+
+    When max_points is set, uses memmap-based random sampling so only
+    ~max_points records are paged into RAM instead of the full file.
+    Falls back to trimesh if the binary-sampling path fails.
+    """
     if not pointcloud_path.lower().endswith('.ply'):
         raise ValueError(f"Expected PLY file, got: {pointcloud_path}")
-    
+
+    if max_points is not None:
+        try:
+            points = _load_ply_pointcloud_sampled(pointcloud_path, max_points)
+            if len(points) == 0:
+                raise ValueError(f"Point cloud has no points: {pointcloud_path}")
+            return points
+        except Exception:
+            pass  # fall through to trimesh
+
     try:
         mesh = trimesh.load(pointcloud_path, process=False)
         points = mesh.vertices
     except Exception as e:
         raise ValueError(f"Failed to load point cloud: {e}")
-    
+
     if len(points) == 0:
         raise ValueError(f"Point cloud has no points: {pointcloud_path}")
-    
+
     return points
 
 
 def _spatial_voxel_sample(points: np.ndarray,
                           max_samples: int = 50000,
                           rng: Optional[np.random.Generator] = None) -> np.ndarray:
-    """
-    Sample points uniformly from a voxel grid for representative spatial coverage.
-    
-    Strategy: Divide bounding box into voxels, sample ~1 point per voxel.
-    - Ensures uniform spatial distribution even if input has clustering
-    - Prevents local dense regions from dominating the sample
-    - Maintains statistical representativeness across entire geometry
-    
-    Args:
-        points: Nx3 array of points
-        max_samples: Maximum number of points to sample (default 50000)
-        
-    Returns:
-        Sampled points uniformly distributed in space
-    """
+    """Sample points uniformly from a voxel grid for representative spatial coverage."""
     if len(points) <= max_samples:
         return points
 
     if rng is None:
         rng = np.random.default_rng()
-    
-    # Determine voxel size to get approximately max_samples
+
     bbox_min = np.min(points, axis=0)
-    bbox_max = np.max(points, axis=0)
-    bbox_size = bbox_max - bbox_min
-    
-    # Estimate voxel count for target sample size
-    volume = np.prod(bbox_size)
-    voxel_volume = volume / max_samples
-    voxel_size = np.cbrt(voxel_volume)
-    
-    # Create voxel grid
-    voxel_indices = np.floor((points - bbox_min) / voxel_size).astype(int)
-    
-    # Sample one point per unique voxel
-    unique_voxels, inverse_indices = np.unique(voxel_indices, axis=0, return_inverse=True)
-    sampled_points = []
-    
-    for voxel_id in range(len(unique_voxels)):
-        mask = (inverse_indices == voxel_id)
-        point_indices = np.where(mask)[0]
-        sampled_idx = rng.choice(point_indices)
-        sampled_points.append(points[sampled_idx])
-    
-    return np.array(sampled_points)
+    bbox_size = np.max(points, axis=0) - bbox_min
+
+    voxel_size = np.cbrt(np.prod(bbox_size) / max_samples)
+    voxel_indices = np.floor((points - bbox_min) / voxel_size).astype(np.int32)
+
+    # Encode each voxel as a single int64 key — avoids np.unique on 2D array
+    dims = voxel_indices.max(axis=0) + 1
+    keys = (voxel_indices[:, 0] * np.int64(dims[1]) * dims[2]
+            + voxel_indices[:, 1] * np.int64(dims[2])
+            + voxel_indices[:, 2])
+
+    # Shuffle indices so rng.choice(point_indices) == picking any shuffled position
+    order = rng.permutation(len(points))
+    keys_shuffled = keys[order]
+
+    # Keep the first occurrence of each voxel key after shuffling (= random pick per voxel)
+    _, first = np.unique(keys_shuffled, return_index=True)
+    sampled_indices = order[first]
+
+    if len(sampled_indices) > max_samples:
+        sampled_indices = rng.choice(sampled_indices, size=max_samples, replace=False)
+
+    return points[sampled_indices]
+
+
+def _o3d_point_to_mesh_distances(mesh: trimesh.Trimesh,
+                                  points: np.ndarray) -> np.ndarray:
+    """Compute point-to-mesh distances via Open3D RaycastingScene.
+
+    Uses a C++ BVH with float32 internally — avoids the large per-face numpy
+    allocations that trimesh.proximity.closest_point requires (face normals,
+    triangle arrays), making this safe for meshes with tens of millions of faces.
+    """
+    o3d_mesh = o3d.t.geometry.TriangleMesh()
+    o3d_mesh.vertex.positions = o3d.core.Tensor(
+        np.asarray(mesh.vertices, dtype=np.float32)
+    )
+    o3d_mesh.triangle.indices = o3d.core.Tensor(
+        np.asarray(mesh.faces, dtype=np.int32)
+    )
+    scene = o3d.t.geometry.RaycastingScene()
+    scene.add_triangles(o3d_mesh)
+    query = o3d.core.Tensor(np.asarray(points, dtype=np.float32))
+    distances = scene.compute_distance(query).numpy().astype(np.float64)
+    del scene, o3d_mesh, query
+    return distances
 
 
 def _compute_point_to_mesh_distance(mesh: trimesh.Trimesh,
@@ -133,12 +255,7 @@ def _compute_point_to_mesh_distance(mesh: trimesh.Trimesh,
     """
     # Sample using voxel grid for uniform spatial distribution
     points_sampled = _spatial_voxel_sample(points, max_samples=sample_size, rng=rng)
-    
-    # Compute exact distance to mesh surface (triangles, not just vertices)
-    # trimesh.proximity.closest_point returns (closest_points, distances, face_ids)
-    _, distances, _ = trimesh.proximity.closest_point(mesh, points_sampled)
-    
-    return distances
+    return _o3d_point_to_mesh_distances(mesh, points_sampled)
 
 
 # ============================================================================
@@ -210,26 +327,24 @@ def _mesh_quality_stats(mesh: trimesh.Trimesh,
     
     vertices = mesh.vertices
     faces = mesh.faces
-    
+
     if len(faces) > 10000:
         if rng is None:
             rng = np.random.default_rng()
-        indices = rng.choice(len(faces), 10000, replace=False)
-        faces = faces[indices]
-    
-    aspect_ratios = []
-    
-    for face in faces:
-        v0, v1, v2 = vertices[face]
-        e0 = np.linalg.norm(v1 - v2)
-        e1 = np.linalg.norm(v2 - v0)
-        e2 = np.linalg.norm(v0 - v1)
-        
-        max_ed = max(e0, e1, e2)
-        min_ed = min(e0, e1, e2)
-        
-        if min_ed > 1e-10:
-            aspect_ratios.append(max_ed / min_ed)
+        faces = faces[rng.choice(len(faces), 10000, replace=False)]
+
+    v0 = vertices[faces[:, 0]]
+    v1 = vertices[faces[:, 1]]
+    v2 = vertices[faces[:, 2]]
+    e0 = np.linalg.norm(v1 - v2, axis=1)
+    e1 = np.linalg.norm(v2 - v0, axis=1)
+    e2 = np.linalg.norm(v0 - v1, axis=1)
+    del v0, v1, v2
+    edge_max = np.maximum(np.maximum(e0, e1), e2)
+    edge_min = np.minimum(np.minimum(e0, e1), e2)
+    valid = edge_min > 1e-10
+    aspect_ratios = (edge_max[valid] / edge_min[valid]).tolist()
+    del e0, e1, e2, edge_max, edge_min, valid
     
     # Compute residuum using voxel sampling
     residuum_c2m = _compute_point_to_mesh_distance(mesh, ground_truth_points, sample_size=sample_size, rng=rng)  # Cloud to Mesh
@@ -263,22 +378,21 @@ def _mesh_structure_stats(mesh: trimesh.Trimesh,
     vertex_count = len(vertices)
     face_count = len(faces)
     
-    faces_check = faces
-    if len(faces) > 50000:
+    n_sample = min(len(faces), 50000)
+    if len(faces) > n_sample:
         if rng is None:
             rng = np.random.default_rng()
-        indices = rng.choice(len(faces), 50000, replace=False)
-        faces_check = faces[indices]
-    
-    degen_count = 0
-    for face in faces_check:
-        v0, v1, v2 = vertices[face]
-        area = 0.5 * np.linalg.norm(np.cross(v1 - v0, v2 - v0))
-        if area < 1e-10:
-            degen_count += 1
-    
-    if len(faces) > 50000:
-        degen_count = int(degen_count * len(faces) / 50000)
+        faces_check = faces[rng.choice(len(faces), n_sample, replace=False)]
+    else:
+        faces_check = faces
+
+    v0 = vertices[faces_check[:, 0]]
+    v1 = vertices[faces_check[:, 1]]
+    v2 = vertices[faces_check[:, 2]]
+    areas = 0.5 * np.linalg.norm(np.cross(v1 - v0, v2 - v0), axis=1)
+    del v0, v1, v2
+    degen_sampled = int(np.sum(areas < 1e-10))
+    degen_count = int(degen_sampled * len(faces) / n_sample) if len(faces) > n_sample else degen_sampled
     
     return {
         'vertices': vertex_count,
@@ -288,23 +402,24 @@ def _mesh_structure_stats(mesh: trimesh.Trimesh,
 
 
 def _watertightness_manifoldness(mesh: trimesh.Trimesh) -> Tuple[bool, bool]:
-    """Check watertightness and manifoldness.
-    OPTIMIZED: Check manifoldness first (faster); if not manifold, skip watertightness."""
-    # Quick manifoldness check first
-    edges = {}
-    for face in mesh.faces:
-        for i in range(3):
-            edge = tuple(sorted([face[i], face[(i + 1) % 3]]))
-            edges[edge] = edges.get(edge, 0) + 1
-    
-    is_manifold = all(count == 2 for count in edges.values())
-    
-    # If not manifold, cannot be watertight
-    if not is_manifold:
-        is_watertight = False
-    else:
-        is_watertight = mesh.is_watertight
-    
+    """Check watertightness and manifoldness (fully vectorized, no Python loops)."""
+    faces = mesh.faces  # (F, 3) int32
+    # Build all three directed edges per face, then sort each pair → undirected edges
+    e01 = np.sort(faces[:, [0, 1]], axis=1)
+    e12 = np.sort(faces[:, [1, 2]], axis=1)
+    e20 = np.sort(faces[:, [2, 0]], axis=1)
+    all_edges = np.concatenate([e01, e12, e20], axis=0)  # (3F, 2)
+
+    # Encode as single int64 so np.unique works on 1D (faster, less memory)
+    n_verts = int(mesh.vertices.shape[0])
+    edge_keys = all_edges[:, 0].astype(np.int64) * n_verts + all_edges[:, 1]
+    del all_edges, e01, e12, e20
+
+    _, counts = np.unique(edge_keys, return_counts=True)
+    del edge_keys
+
+    is_manifold = bool(np.all(counts == 2))
+    is_watertight = is_manifold and bool(mesh.is_watertight)
     return is_watertight, is_manifold
 
 
@@ -341,30 +456,16 @@ def _f_score(mesh: trimesh.Trimesh,
 # Visualization Functions
 # ============================================================================
 
-def _create_distance_heatmap_mesh(mesh: trimesh.Trimesh,
-                                  ground_truth_points: np.ndarray,
-                                  thresholds_m: List[float] = None,
-                                  sample_size: int = 50000) -> go.Figure:
-    """
-    Create interactive 3D heatmap visualization using Plotly Scatter.
-    Dynamically generates color categories based on provided thresholds.
-    
-    Args:
-        mesh: Trimesh object
-        ground_truth_points: Nx3 array of ground truth points (in meters)
-        thresholds_m: Error thresholds in meters [t1, t2, t3] for categories.
-                     Categories: [0-t1], [t1-t2], [t2-t3], [>=t3]
-        sample_size: Max points to sample for visualization
-        
-    Returns:
-        Plotly Figure with colored point cloud
+def _create_distance_heatmap_mesh(points_sampled: np.ndarray,
+                                  distances_sampled: np.ndarray,
+                                  thresholds_m: List[float] = None) -> go.Figure:
+    """Create interactive 3D heatmap visualization using pre-computed distances.
+
+    Accepts already-sampled points and distances so the caller's BVH scene is
+    reused and no second scene build is needed.
     """
     if thresholds_m is None:
         thresholds_m = [0.01, 0.02, 0.10]
-    
-    # Compute distances and sample points
-    points_sampled = _spatial_voxel_sample(ground_truth_points, max_samples=sample_size)
-    _, distances_sampled, _ = trimesh.proximity.closest_point(mesh, points_sampled)
     
     # Dynamically create color categories based on thresholds
     t1, t2, t3 = thresholds_m[0], thresholds_m[1], thresholds_m[2]
@@ -473,7 +574,8 @@ def evaluate_mesh(mesh: trimesh.Trimesh,
                         compute_residual_distribution: bool = True,
                         compute_watertightness: bool = True,
                         compute_f_score: bool = True,
-                        compute_visualization: bool = True) -> Dict:
+                        compute_visualization: bool = True,
+                        original_point_count: Optional[int] = None) -> Dict:
     """
     Evaluate a single mesh against ground truth with object-based API.
     OPTIMIZED: Samples points ONCE, reuses across all distance-based metrics.
@@ -502,7 +604,8 @@ def evaluate_mesh(mesh: trimesh.Trimesh,
         thresholds_cm = [1.0, 2.0, 10.0]
     
     thresholds_m = [t / 100.0 for t in thresholds_cm]
-    pc_vertices = len(ground_truth_points)
+    pc_vertices = original_point_count if original_point_count is not None else len(ground_truth_points)
+    pc_sampled = len(ground_truth_points)
     mesh_vertices = len(mesh.vertices)
     
     if verbose:
@@ -517,7 +620,7 @@ def evaluate_mesh(mesh: trimesh.Trimesh,
         if verbose:
             print("Sampling points...")
         points_sampled = _spatial_voxel_sample(ground_truth_points, max_samples=sample_size, rng=rng)
-        _, distances_sampled, _ = trimesh.proximity.closest_point(mesh, points_sampled)
+        distances_sampled = _o3d_point_to_mesh_distances(mesh, points_sampled)
 
     if compute_distance and distances_sampled is not None:
         if verbose:
@@ -546,20 +649,22 @@ def evaluate_mesh(mesh: trimesh.Trimesh,
         vertices = mesh.vertices
         faces = mesh.faces
 
+        sample_faces = faces
         if len(faces) > 10000:
-            indices = rng.choice(len(faces), 10000, replace=False)
-            faces = faces[indices]
+            sample_faces = faces[rng.choice(len(faces), 10000, replace=False)]
 
-        aspect_ratios = []
-        for face in faces:
-            v0, v1, v2 = vertices[face]
-            e0 = np.linalg.norm(v1 - v2)
-            e1 = np.linalg.norm(v2 - v0)
-            e2 = np.linalg.norm(v0 - v1)
-            max_ed = max(e0, e1, e2)
-            min_ed = min(e0, e1, e2)
-            if min_ed > 1e-10:
-                aspect_ratios.append(max_ed / min_ed)
+        v0 = vertices[sample_faces[:, 0]]
+        v1 = vertices[sample_faces[:, 1]]
+        v2 = vertices[sample_faces[:, 2]]
+        e0 = np.linalg.norm(v1 - v2, axis=1)
+        e1 = np.linalg.norm(v2 - v0, axis=1)
+        e2 = np.linalg.norm(v0 - v1, axis=1)
+        del v0, v1, v2
+        edge_max = np.maximum(np.maximum(e0, e1), e2)
+        edge_min = np.minimum(np.minimum(e0, e1), e2)
+        valid = edge_min > 1e-10
+        aspect_ratios = (edge_max[valid] / edge_min[valid]).tolist()
+        del e0, e1, e2, edge_max, edge_min, valid
     else:
         if verbose:
             print("Mesh structure... skipped")
@@ -612,20 +717,25 @@ def evaluate_mesh(mesh: trimesh.Trimesh,
     if compute_visualization:
         if verbose:
             print("Visualization...")
-        plotly_fig = _create_distance_heatmap_mesh(
-            mesh,
-            ground_truth_points,
-            thresholds_m=thresholds_m,
-            sample_size=sample_size,
-        )
+        if distances_sampled is not None:
+            plotly_fig = _create_distance_heatmap_mesh(
+                points_sampled, distances_sampled, thresholds_m=thresholds_m
+            )
+        else:
+            # distances not computed yet — build them now only for visualization
+            pts = _spatial_voxel_sample(ground_truth_points, max_samples=sample_size, rng=rng)
+            dists = _o3d_point_to_mesh_distances(mesh, pts)
+            plotly_fig = _create_distance_heatmap_mesh(pts, dists, thresholds_m=thresholds_m)
+            del pts, dists
     else:
         if verbose:
             print("Visualization... skipped")
         plotly_fig = None
-    
-    if verbose:
-        pass
-    
+
+    # Release large arrays — they are no longer needed for the summary or return value
+    del distances_sampled, ground_truth_points
+    gc.collect()
+
     # Detailed summary with all metrics and residuum distribution (separate from progress log)
     if detailed_summary:
         print("\nResults:")
@@ -638,7 +748,10 @@ def evaluate_mesh(mesh: trimesh.Trimesh,
 
         if compute_structure:
             print("Structure:")
-            print(f"  Points (Cloud):              {pc_vertices}")
+            if pc_sampled < pc_vertices:
+                print(f"  Points (Cloud):              {pc_vertices} (subsampled to {pc_sampled})")
+            else:
+                print(f"  Points (Cloud):              {pc_vertices}")
             print(f"  Vertices (Mesh):             {structure['vertices']}")
             print(f"  Faces (Mesh):                {structure['faces']}")
             print(f"  Degenerate Triangles:        {structure['degenerate_triangles']}")
