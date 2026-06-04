@@ -1,0 +1,35 @@
+# bpa_config.yaml  —  Ball Pivoting Algorithm reconstruction
+# Validated pipeline mirrors MeshLab v3: Resampling → Normals → Orient → BPA
+
+# ── Input / Output ────────────────────────────────────────────────────
+ply_path: "Z:/GeoBIM_CAS/01_data_acquisition/02_rtc360/pointcloud_rtc360_raw.ply"
+out_path: "Z:/3D_Vision/2_bpa/output/mesh.ply"
+
+# ── Resampling (Poisson-Disk equivalent) ──────────────────────────────
+# Voxel downsampling creates uniform point spacing before BPA.
+# MeshLab used Poisson-Disk r=30mm → set voxel_size: 0.030
+# Set to null to skip resampling (not recommended for raw LiDAR clouds).
+voxel_size: 0.030   # [m]
+
+# ── Normal Estimation ─────────────────────────────────────────────────
+# MeshLab: PCA kNN=16, View Port Orientation
+# estimate_normals: false if the cloud already has oriented normals
+estimate_normals: true
+normal_max_nn: 16        # kNN for PCA normal estimation (MeshLab: 16)
+normal_radius: 0.10      # hybrid search radius [m]  (≈3× voxel_size)
+orient_normals: true
+orient_normals_k: 16     # consistent tangent-plane propagation
+
+# ── Ball Pivoting ─────────────────────────────────────────────────────
+# MeshLab validated: r=50mm on a 30mm-resampled cloud.
+# radii: explicit list [m].  Leave empty ([]) to auto-compute from
+#        avg nn-distance × radii_factors (useful if voxel_size changes).
+radii: [0.05]                    # [m]  — MeshLab r=50mm
+radii_factors: [1.5, 2.5, 5.0]   # fallback if radii is empty
+
+# ── Post-processing ───────────────────────────────────────────────────
+remove_duplicates: true
+
+# ── Color Transfer ────────────────────────────────────────────────────
+color_knn: 1        # nearest neighbours into original (unresampled) cloud
+n_threads: -1       # -1 = all cores
