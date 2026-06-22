@@ -79,7 +79,7 @@ All parameters are set in `configs/nksr_config.yaml`
 ### Running
 ```bash
 conda activate 3DV
-python scripts/nksr_reconstruction.py
+python scripts/reconstruction/run_nksr_reconstruction.py
 ```
 
 Output is written to `outputs/nksr_reconstruction.ply`. Individual chunk PLYs are saved to `outputs/chunks/` during reconstruction and can be inspected separately.
@@ -88,7 +88,7 @@ Output is written to `outputs/nksr_reconstruction.ply`. Individual chunk PLYs ar
 
 The pipeline produces a colored triangle mesh in PLY format with per-vertex RGB colors projected from the original LiDAR scan. The mesh can be viewed in CloudCompare, MeshLab, or using the provided viewer script:
 ```bash
-python scripts/view_mesh.py outputs/nksr_reconstruction.ply
+python scripts/visualization/view_mesh.py outputs/nksr_reconstruction.ply
 ```
 
 ## Mesh Quality Assessment
@@ -98,7 +98,7 @@ Evaluate a reconstructed mesh against a LiDAR ground-truth point cloud. Computes
 ### Running (GUI)
 ```bash
 conda activate 3DV
-python scripts/run_quality_assessment.py
+python scripts/evaluation/run_quality_assessment.py
 ```
 
 Select a mesh (`.ply`) and a point cloud (`.ply`), set the desired sample size and thresholds, then click **Evaluate**.
@@ -129,7 +129,7 @@ pip install vdbfusion
 
 Point `input.las_path` in `configs/vdbfusion_config.yaml` at your LAS point cloud, then run:
 ```bash
-python scripts/vdbfusion_reconstruction.py --config configs/vdbfusion_config.yaml
+python scripts/reconstruction/run_vdbfusion_reconstruction.py --config configs/vdbfusion_config.yaml
 ```
 
 Outputs:

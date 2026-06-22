@@ -49,7 +49,7 @@ If you change `voxel_size`, adjust `radii` proportionally, or leave `radii` empt
 4. Run from the repository root:
 
 ```
-python scripts/run_ball_pivoting.py
+python scripts/reconstruction/run_ball_pivoting_reconstruction.py
 ```
 
 ## Pipeline steps

@@ -15,7 +15,7 @@ with open("configs/bpa_config.yaml", "r") as f:
 # ── 1. Load ────────────────────────────────────────────────────────────
 print("Loading...")
 pcd = o3d.io.read_point_cloud(cfg["ply_path"])
-pts    = np.asarray(pcd.points)
+pts = np.asarray(pcd.points)
 colors = np.asarray(pcd.colors)
 print(f"Loaded {len(pts):,} points")
 print(f"Has normals: {pcd.has_normals()}")
@@ -41,7 +41,7 @@ if cfg["estimate_normals"] or not pcd_bpa.has_normals():
     )
     if cfg.get("orient_normals", True):
         pcd_bpa.orient_normals_consistent_tangent_plane(cfg.get("orient_normals_k", 16))
-    print(f"Normals estimated in {time.time()-t0:.1f}s")
+    print(f"Normals estimated in {time.time() - t0:.1f}s")
 else:
     print("Using existing normals.")
 
@@ -50,9 +50,9 @@ radii = cfg.get("radii") or []
 if not radii:
     print("Auto-computing ball radii from average nn-distance...")
     nn_dists = np.asarray(pcd_bpa.compute_nearest_neighbor_distance())
-    avg_dist  = float(np.mean(nn_dists))
-    factors   = cfg.get("radii_factors", [1.5, 2.5, 5.0])
-    radii     = [avg_dist * f for f in factors]
+    avg_dist = float(np.mean(nn_dists))
+    factors = cfg.get("radii_factors", [1.5, 2.5, 5.0])
+    radii = [avg_dist * f for f in factors]
     print(f"  avg nn-distance: {avg_dist:.4f} m")
 print(f"  radii: {[f'{r:.4f}' for r in radii]} m")
 
@@ -63,7 +63,7 @@ mesh = o3d.geometry.TriangleMesh.create_from_point_cloud_ball_pivoting(
     pcd_bpa,
     o3d.utility.DoubleVector(radii),
 )
-print(f"Done in {time.time()-t0:.1f}s")
+print(f"Done in {time.time() - t0:.1f}s")
 print(f"Raw mesh: {len(mesh.vertices):,} verts, {len(mesh.triangles):,} tris")
 
 # ── 6. Post-processing ─────────────────────────────────────────────────
@@ -79,7 +79,7 @@ if colors.size > 0:
     print("Baking colors...")
     n_threads = cfg.get("n_threads", -1)
     verts = np.asarray(mesh.vertices)
-    tree  = KDTree(pts)
+    tree = KDTree(pts)
     _, idx = tree.query(verts, workers=n_threads)
     mesh.vertex_colors = o3d.utility.Vector3dVector(colors[idx])
 

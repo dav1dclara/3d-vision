@@ -1,7 +1,7 @@
 """View a triangle mesh in the Rerun viewer.
 
 Usage:
-    python scripts/view_mesh.py outputs/nksr_reconstruction.ply
+    python scripts/visualization/view_mesh.py outputs/nksr_reconstruction.ply
 """
 
 import argparse

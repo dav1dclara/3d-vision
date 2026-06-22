@@ -13,7 +13,7 @@ See the top-level `requirements.txt` for the dependency list.
 2) Install dependencies: `pip install -r requirements.txt`.
 3) Start the GUI:
 
-python scripts/run_quality_assessment.py
+python scripts/evaluation/run_quality_assessment.py
 
 ## Usage
 1) Click Browse next to Mesh (.ply) and select the reconstructed mesh.

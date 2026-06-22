@@ -8,7 +8,7 @@ This script provides a minimal graphical interface to:
 4. Display results and visualization
 
 Usage:
-    python scripts/run_quality_assessment.py
+    python scripts/evaluation/run_quality_assessment.py
 """
 
 import gc
@@ -20,10 +20,10 @@ import threading
 from pathlib import Path
 import sys
 
-# Add src to path for imports
-sys.path.insert(0, str(Path(__file__).parent.parent / "src"))
+# Add src to path so the lidar2mesh package is importable without installation
+sys.path.insert(0, str(Path(__file__).resolve().parents[2] / "src"))
 
-from quality_assessment import (
+from lidar2mesh.quality_assessment import (
     _load_ply_mesh,
     _load_ply_pointcloud,
     _count_ply_points,
@@ -33,67 +33,75 @@ from quality_assessment import (
 
 class QualityAssessmentGUI:
     """Minimal GUI for mesh quality assessment workflow."""
-    
+
     def __init__(self, root):
         self.root = root
         self.root.title("Mesh Quality Assessment")
         self.root.geometry("900x820")
         self.root.minsize(900, 820)
-        
+
         self.mesh_path = None
         self.pointcloud_path = None
         self.point_count = None
         self.last_plot = None
         self.log_queue = Queue()
         self.metric_checks = []
-        
+
         # ── UI Layout ──────────────────────────────────────────────────
-        
+
         # Title
-        title = tk.Label(root, text="Mesh Quality Assessment", font=("Arial", 14, "bold"))
+        title = tk.Label(
+            root, text="Mesh Quality Assessment", font=("Arial", 14, "bold")
+        )
         title.pack(pady=10)
-        
+
         # Mesh selection
         mesh_frame = tk.Frame(root)
         mesh_frame.pack(pady=10, padx=20, fill="x")
-        
+
         tk.Label(mesh_frame, text="Mesh (.ply):", font=("Arial", 10)).pack(side="left")
         self.mesh_label = tk.Label(
             mesh_frame, text="No file selected", fg="gray", font=("Arial", 9)
         )
         self.mesh_label.pack(side="left", padx=10, fill="x", expand=True)
-        
-        tk.Button(
-            mesh_frame, text="Browse", command=self.select_mesh, width=12
-        ).pack(side="right")
-        
+
+        tk.Button(mesh_frame, text="Browse", command=self.select_mesh, width=12).pack(
+            side="right"
+        )
+
         # Point cloud selection
         pc_frame = tk.Frame(root)
         pc_frame.pack(pady=10, padx=20, fill="x")
-        
-        tk.Label(pc_frame, text="Point Cloud (.ply):", font=("Arial", 10)).pack(side="left")
+
+        tk.Label(pc_frame, text="Point Cloud (.ply):", font=("Arial", 10)).pack(
+            side="left"
+        )
         self.pc_label = tk.Label(
             pc_frame, text="No file selected", fg="gray", font=("Arial", 9)
         )
         self.pc_label.pack(side="left", padx=10, fill="x", expand=True)
-        
+
         tk.Button(
             pc_frame, text="Browse", command=self.select_pointcloud, width=12
         ).pack(side="right")
-        
+
         # Separator
         tk.Frame(root, height=2, bd=1, relief="sunken").pack(fill="x", pady=20, padx=20)
-        
+
         # Options frame
-        options_frame = tk.LabelFrame(root, text="Options", font=("Arial", 10, "bold"), padx=10, pady=10)
+        options_frame = tk.LabelFrame(
+            root, text="Options", font=("Arial", 10, "bold"), padx=10, pady=10
+        )
         options_frame.pack(pady=10, padx=20, fill="x")
-        
+
         # Sample size
         sample_frame = tk.Frame(options_frame)
         sample_frame.pack(fill="x", pady=5)
         tk.Label(sample_frame, text="Max sample size:", width=15).pack(side="left")
         self.sample_var = tk.StringVar(value="50000")
-        self.sample_entry = tk.Entry(sample_frame, textvariable=self.sample_var, width=10)
+        self.sample_entry = tk.Entry(
+            sample_frame, textvariable=self.sample_var, width=10
+        )
         self.sample_entry.pack(side="left", padx=5)
         self.use_all_points_var = tk.BooleanVar(value=False)
         tk.Checkbutton(
@@ -102,7 +110,7 @@ class QualityAssessmentGUI:
             variable=self.use_all_points_var,
             command=self._toggle_sample_entry,
         ).pack(side="left", padx=10)
-        
+
         # Thresholds
         thresh_frame = tk.Frame(options_frame)
         thresh_frame.pack(fill="x", pady=5)
@@ -169,7 +177,7 @@ class QualityAssessmentGUI:
             chk = tk.Checkbutton(metrics_frame, text=label, variable=var)
             chk.grid(row=idx // 2, column=idx % 2, sticky="w", padx=5, pady=2)
             self.metric_checks.append(chk)
-        
+
         # Separator
         tk.Frame(root, height=1, bd=1, relief="sunken").pack(fill="x", pady=10, padx=20)
 
@@ -178,37 +186,47 @@ class QualityAssessmentGUI:
         status_frame.pack(fill="x", padx=20)
         tk.Label(status_frame, text="Status:", width=8, anchor="w").pack(side="left")
         self.status_var = tk.StringVar(value="Ready.")
-        self.status_label = tk.Label(status_frame, textvariable=self.status_var, anchor="w")
+        self.status_label = tk.Label(
+            status_frame, textvariable=self.status_var, anchor="w"
+        )
         self.status_label.pack(side="left", fill="x", expand=True)
 
         # Log output
-        self.log_box = scrolledtext.ScrolledText(root, height=14, wrap="word", state="disabled")
+        self.log_box = scrolledtext.ScrolledText(
+            root, height=14, wrap="word", state="disabled"
+        )
         self.log_box.pack(fill="both", padx=20, pady=10, expand=True)
 
         # Action buttons
         button_frame = tk.Frame(root)
         button_frame.pack(pady=10)
-        
+
         tk.Button(
-            button_frame, text="Evaluate", command=self.run_evaluation,
-            bg="green", fg="white", font=("Arial", 11, "bold"), width=15
+            button_frame,
+            text="Evaluate",
+            command=self.run_evaluation,
+            bg="green",
+            fg="white",
+            font=("Arial", 11, "bold"),
+            width=15,
         ).pack(side="left", padx=10)
-        
+
         self.plot_button = tk.Button(
-            button_frame, text="Open Plot", command=self.open_plot,
-            width=15, state="disabled"
+            button_frame,
+            text="Open Plot",
+            command=self.open_plot,
+            width=15,
+            state="disabled",
         )
         self.plot_button.pack(side="left", padx=10)
 
         self.clear_button = tk.Button(
-            button_frame, text="Clear", command=self.clear_selection,
-            width=15
+            button_frame, text="Clear", command=self.clear_selection, width=15
         )
         self.clear_button.pack(side="left", padx=10)
-        
+
         self.exit_button = tk.Button(
-            button_frame, text="Exit", command=root.quit,
-            bg="red", fg="white", width=15
+            button_frame, text="Exit", command=root.quit, bg="red", fg="white", width=15
         )
         self.exit_button.pack(side="left", padx=10)
 
@@ -253,25 +271,25 @@ class QualityAssessmentGUI:
     def _enqueue_log(self, text):
         """Thread-safe log enqueue."""
         self.log_queue.put(text)
-    
+
     def select_mesh(self):
         """Open file dialog to select mesh."""
         path = filedialog.askopenfilename(
             title="Select Mesh File",
             filetypes=[("PLY files", "*.ply"), ("All files", "*.*")],
-            initialdir="outputs"
+            initialdir="outputs",
         )
         if path:
             self.mesh_path = path
             filename = Path(path).name
             self.mesh_label.config(text=filename, fg="black")
-    
+
     def select_pointcloud(self):
         """Open file dialog to select point cloud."""
         path = filedialog.askopenfilename(
             title="Select Point Cloud File",
             filetypes=[("PLY files", "*.ply"), ("All files", "*.*")],
-            initialdir="outputs"
+            initialdir="outputs",
         )
         if path:
             self.pointcloud_path = path
@@ -286,7 +304,7 @@ class QualityAssessmentGUI:
                     self.root.update_idletasks()
             except Exception:
                 self.point_count = None
-    
+
     def clear_selection(self):
         """Clear all selections."""
         self.mesh_path = None
@@ -309,18 +327,18 @@ class QualityAssessmentGUI:
             self.last_plot.show()
         except Exception as e:
             messagebox.showerror("Error", f"Could not display plot:\n{e}")
-    
+
     def run_evaluation(self):
         """Run quality assessment."""
         # ── Validation ─────────────────────────────────────────────────
         if not self.mesh_path:
             messagebox.showerror("Error", "Please select a mesh file")
             return
-        
+
         if not self.pointcloud_path:
             messagebox.showerror("Error", "Please select a point cloud file")
             return
-        
+
         # ── Parse options ──────────────────────────────────────────────
         if self.use_all_points_var.get():
             sample_size = None
@@ -330,7 +348,7 @@ class QualityAssessmentGUI:
             except ValueError:
                 messagebox.showerror("Error", "Invalid sample size (must be integer)")
                 return
-        
+
         try:
             t1 = float(self.thresh1_var.get())
             t2 = float(self.thresh2_var.get())
@@ -341,7 +359,7 @@ class QualityAssessmentGUI:
         except ValueError as e:
             messagebox.showerror("Error", f"Invalid thresholds: {e}")
             return
-        
+
         # ── Load files ─────────────────────────────────────────────────
         try:
             self._set_status("Loading files...")
@@ -350,8 +368,7 @@ class QualityAssessmentGUI:
             mesh = _load_ply_mesh(self.mesh_path)
             # Pass max_points so only the needed sample is paged into RAM.
             # When "use all points" is active, sample_size is None → full load.
-            points = _load_ply_pointcloud(self.pointcloud_path,
-                                          max_points=sample_size)
+            points = _load_ply_pointcloud(self.pointcloud_path, max_points=sample_size)
             if self.point_count is None:
                 self.point_count = len(points)
             if self.use_all_points_var.get():
@@ -388,7 +405,10 @@ class QualityAssessmentGUI:
             daemon=True,
         )
         thread.start()
-        del mesh, points  # release GUI-side references; thread holds the only copies now
+        del (
+            mesh,
+            points,
+        )  # release GUI-side references; thread holds the only copies now
         gc.collect()
 
     def _set_controls_state(self, state):
@@ -396,7 +416,9 @@ class QualityAssessmentGUI:
         if state == "disabled":
             self.plot_button.config(state="disabled")
         else:
-            self.plot_button.config(state="normal" if self.last_plot is not None else "disabled")
+            self.plot_button.config(
+                state="normal" if self.last_plot is not None else "disabled"
+            )
         self.clear_button.config(state=state)
         self.exit_button.config(state=state)
         for chk in self.metric_checks:
@@ -449,7 +471,6 @@ class QualityAssessmentGUI:
             self.root.after(0, self._evaluation_success, results)
 
         except Exception as e:
-            del mesh, points
             gc.collect()
             self._enqueue_log(f"ERROR: {e}")
             self.root.after(0, self._evaluation_failed, e)
@@ -499,7 +520,7 @@ class _QueueWriter:
 def main():
     """Launch the GUI."""
     root = tk.Tk()
-    gui = QualityAssessmentGUI(root)
+    QualityAssessmentGUI(root)
     root.mainloop()
 
 

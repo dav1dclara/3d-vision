@@ -1,7 +1,6 @@
 import os
 import yaml
 import open3d as o3d
-from pathlib import Path
 from pcdmeshing import run_block_meshing
 from datetime import datetime
 
@@ -10,7 +9,7 @@ start = datetime.now()
 with open("configs/pcd_config.yaml", "r") as f:
     cfg = yaml.safe_load(f)
 
-paths   = cfg["paths"]
+paths = cfg["paths"]
 meshing = cfg["meshing"]
 
 out_path = os.path.join(paths["output_dir"], paths["output_mesh"])

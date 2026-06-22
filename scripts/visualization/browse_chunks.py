@@ -13,16 +13,16 @@ Controls:
 
 Usage:
     # Default — one chunk at a time
-    python scripts/browse_chunks.py --chunks-dir outputs/chunks
+    python scripts/visualization/browse_chunks.py --chunks-dir outputs/chunks
 
     # Full-scene context, highlight current chunk
-    python scripts/browse_chunks.py --chunks-dir outputs/chunks --show-all
+    python scripts/visualization/browse_chunks.py --chunks-dir outputs/chunks --show-all
 
     # Only browse complex chunks
-    python scripts/browse_chunks.py --chunks-dir outputs/chunks --pattern "complex_*"
+    python scripts/visualization/browse_chunks.py --chunks-dir outputs/chunks --pattern "complex_*"
 
     # Save PNGs to a separate folder
-    python scripts/browse_chunks.py --chunks-dir outputs/chunks --save-dir outputs/poster_chunks
+    python scripts/visualization/browse_chunks.py --chunks-dir outputs/chunks --save-dir outputs/poster_chunks
 
 Flags:
     --chunks-dir DIR    Directory containing chunk PLY files (required)
@@ -43,19 +43,25 @@ parser = argparse.ArgumentParser(description="Cycle through chunk PLY files")
 parser.add_argument("--chunks-dir", required=True)
 parser.add_argument("--pattern", default="*.ply")
 parser.add_argument("--point-size", type=float, default=2.0)
-parser.add_argument("--save-dir", default=None,
-                    help="Directory for saved PNGs (default: same as --chunks-dir)")
-parser.add_argument("--show-all", action="store_true",
-                    help="Show all chunks as dim background; highlight current in white")
+parser.add_argument(
+    "--save-dir",
+    default=None,
+    help="Directory for saved PNGs (default: same as --chunks-dir)",
+)
+parser.add_argument(
+    "--show-all",
+    action="store_true",
+    help="Show all chunks as dim background; highlight current in white",
+)
 args = parser.parse_args()
 
 SAVE_DIR = args.save_dir or args.chunks_dir
 os.makedirs(SAVE_DIR, exist_ok=True)
 
-BG_COLOR      = np.array([0.0, 0.0, 0.0])
-HIGHLIGHT     = [0.85, 0.85, 0.85] # light grey — current chunk (room for shadows)
-DIM_COLOR     = [0.2,  0.2,  0.2]  # dark grey — background chunks
-BG_THRESHOLD  = 8
+BG_COLOR = np.array([0.0, 0.0, 0.0])
+HIGHLIGHT = [0.85, 0.85, 0.85]  # light grey — current chunk (room for shadows)
+DIM_COLOR = [0.2, 0.2, 0.2]  # dark grey — background chunks
+BG_THRESHOLD = 8
 
 files = sorted(glob.glob(os.path.join(args.chunks_dir, args.pattern)))
 if not files:
@@ -63,6 +69,7 @@ if not files:
     raise SystemExit(1)
 
 print(f"Found {len(files)} chunks. Use ← → to browse, S to save PNG, Q to quit.")
+
 
 # ── pre-load all geometries ───────────────────────────────────────────────
 def read_geom(path):
@@ -73,6 +80,7 @@ def read_geom(path):
         geom.compute_vertex_normals()
     return geom
 
+
 if args.show_all:
     print("Loading all chunks (--show-all mode)...")
     all_geoms = []
@@ -81,7 +89,7 @@ if args.show_all:
         g.paint_uniform_color(DIM_COLOR)
         all_geoms.append(g)
         if (i + 1) % 20 == 0:
-            print(f"  {i+1}/{len(files)}")
+            print(f"  {i + 1}/{len(files)}")
     print("Done.")
 
 # ── viewer ────────────────────────────────────────────────────────────────
@@ -95,10 +103,12 @@ opt.background_color = BG_COLOR
 opt.light_on = True
 opt.mesh_show_back_face = True
 
-current_geom = [None]   # tracked only in single-chunk mode
+current_geom = [None]  # tracked only in single-chunk mode
+
 
 def print_label(i):
-    print(f"[{i+1:>3}/{len(files)}]  {os.path.basename(files[i])}")
+    print(f"[{i + 1:>3}/{len(files)}]  {os.path.basename(files[i])}")
+
 
 def refresh(new_idx):
     idx[0] = new_idx % len(files)
@@ -123,37 +133,42 @@ def refresh(new_idx):
         vis.add_geometry(geom, reset_bounding_box=False)
         current_geom[0] = geom
 
+
 def next_chunk(vis):
     refresh(idx[0] + 1)
     return False
+
 
 def prev_chunk(vis):
     refresh(idx[0] - 1)
     return False
 
+
 def reset_cam(vis):
     vis.reset_view_point(True)
     return False
 
+
 def save_transparent(vis):
     img_float = np.asarray(vis.capture_screen_float_buffer(do_render=True))
-    img_u8    = (np.clip(img_float, 0.0, 1.0) * 255).astype(np.uint8)
-    bg_u8     = (BG_COLOR * 255).astype(np.uint8)
-    diff      = np.abs(img_u8.astype(np.int16) - bg_u8.astype(np.int16))
-    bg_mask   = np.all(diff <= BG_THRESHOLD, axis=2)
-    alpha     = np.where(bg_mask, 0, 255).astype(np.uint8)
-    rgba      = np.dstack([img_u8, alpha])
-    stem      = os.path.splitext(os.path.basename(files[idx[0]]))[0]
-    out       = os.path.join(SAVE_DIR, f"{stem}_render.png")
+    img_u8 = (np.clip(img_float, 0.0, 1.0) * 255).astype(np.uint8)
+    bg_u8 = (BG_COLOR * 255).astype(np.uint8)
+    diff = np.abs(img_u8.astype(np.int16) - bg_u8.astype(np.int16))
+    bg_mask = np.all(diff <= BG_THRESHOLD, axis=2)
+    alpha = np.where(bg_mask, 0, 255).astype(np.uint8)
+    rgba = np.dstack([img_u8, alpha])
+    stem = os.path.splitext(os.path.basename(files[idx[0]]))[0]
+    out = os.path.join(SAVE_DIR, f"{stem}_render.png")
     Image.fromarray(rgba).save(out, "PNG")
     print(f"  Saved → {out}")
     return False
 
+
 GLFW_KEY_RIGHT = 262
-GLFW_KEY_LEFT  = 263
+GLFW_KEY_LEFT = 263
 
 vis.register_key_callback(GLFW_KEY_RIGHT, next_chunk)
-vis.register_key_callback(GLFW_KEY_LEFT,  prev_chunk)
+vis.register_key_callback(GLFW_KEY_LEFT, prev_chunk)
 vis.register_key_callback(ord("N"), next_chunk)
 vis.register_key_callback(ord("P"), prev_chunk)
 vis.register_key_callback(ord("R"), reset_cam)

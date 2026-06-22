@@ -1,3 +1,4 @@
+import os
 import numpy as np
 import open3d as o3d
 from scipy.spatial import KDTree
@@ -12,10 +13,9 @@ with open("configs/poisson_config.yaml", "r") as f:
     cfg = yaml.safe_load(f)
 
 # ── 1. Load ──────────────────────────────────────────────────────────
-import os
 paths = cfg["paths"]
 recon = cfg["reconstruction"]
-trim  = cfg["trimming"]
+trim = cfg["trimming"]
 
 out_path = os.path.join(paths["output_dir"], paths["output_mesh"])
 
@@ -37,7 +37,7 @@ mesh, densities = o3d.geometry.TriangleMesh.create_from_point_cloud_poisson(
     linear_fit=recon["linear_fit"],
     n_threads=recon["n_threads"],
 )
-print(f"Done in {time.time()-t0:.1f}s")
+print(f"Done in {time.time() - t0:.1f}s")
 print(f"Raw mesh: {len(mesh.vertices):,} verts, {len(mesh.triangles):,} tris")
 
 # ── 3. Trim low-density vertices ──────────────────────────────────────

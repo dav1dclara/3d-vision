@@ -168,11 +168,11 @@ A conda env from `requirements.txt` **plus** a shared site-packages `.pth` into 
 
 ```bash
 conda activate 3DV
-python scripts/nksr_reconstruction.py                              # main pipeline → outputs/nksr_reconstruction.ply
-python scripts/run_ball_pivoting.py                                # BPA baseline
-python scripts/vdbfusion_reconstruction.py --config configs/vdbfusion_config.yaml
-python scripts/poisson_meshing.py
-python scripts/pcd_meshing.py
+python scripts/reconstruction/nksr_reconstruction.py               # main pipeline → outputs/nksr_reconstruction.ply
+python scripts/reconstruction/run_ball_pivoting.py                 # BPA baseline
+python scripts/reconstruction/vdbfusion_reconstruction.py --config configs/vdbfusion_config.yaml
+python scripts/reconstruction/poisson_meshing.py
+python scripts/reconstruction/pcd_meshing.py
 python scripts/run_quality_assessment.py                           # Tkinter GUI; needs a display
 ```
 The NKSR script also exposes `--save-boundaries` / `--save-voxel-grid` (export the decomposition as wireframes — useful for explaining the method in the report) and `--merge-only` (re-merge existing chunks without GPU work).
