@@ -31,6 +31,7 @@ All parameters are set in `configs/bpa_config.yaml`. Key entries:
 | `radii` | Explicit list of ball radii in metres, e.g. [0.05]. Leave empty ([]) to auto-compute |
 | `radii_factors` | Multipliers applied to avg nn-distance when radii is empty |
 | `remove_duplicates` | true to remove duplicate vertices/triangles after BPA |
+| `color_knn` | Nearest neighbours into the original (full-resolution) cloud for color transfer |
 | `n_threads` | Threads for KDTree color transfer (-1 = all cores) |
 
 ### Choosing the ball radius

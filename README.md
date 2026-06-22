@@ -42,9 +42,9 @@ pre-commit install
 
 All commands are run from the repository root. Pipeline parameters live in `configs/`.
 
-### 🧰 Preprocessing — `scripts/tools/`
+### 🧰 Tools — `scripts/tools/`
 
-Optionally crop a region of interest from a large point cloud, or convert a mesh into a TSDF dataset:
+Helper utilities: crop a region of interest from a large point cloud (pre-reconstruction), or convert a mesh into a TSDF dataset (post-reconstruction):
 
 ```bash
 python scripts/tools/crop_region.py --input scene.ply --output crop.ply --center X Y Z --radius R
