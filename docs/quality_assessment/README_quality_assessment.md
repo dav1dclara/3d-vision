@@ -6,11 +6,11 @@ This document describes how to run the mesh quality assessment GUI and the requi
 The quality assessment tool compares a reconstructed mesh against a reference point cloud and reports distance metrics and residual distribution. It also provides an optional Plotly visualization.
 
 ## Requirements
-See requirements_quality_assessment.txt in the repository root for the minimal dependency set.
+See the top-level `requirements.txt` for the dependency list.
 
 ## Run
 1) Activate your Python environment.
-2) Install the requirements file (pip or conda).
+2) Install dependencies: `pip install -r requirements.txt`.
 3) Start the GUI:
 
 python scripts/run_quality_assessment.py

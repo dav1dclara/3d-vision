@@ -1,46 +1,40 @@
-import rerun as rr
+"""View a triangle mesh in the Rerun viewer.
+
+Usage:
+    python scripts/view_mesh.py outputs/nksr_reconstruction.ply
+"""
+
+import argparse
+from pathlib import Path
+
 import numpy as np
 import open3d as o3d
+import rerun as rr
 
-rr.init("mesh_viewer", spawn=True)
 
-nksr = o3d.io.read_triangle_mesh("../meshes/crop.ply")
-nksr.compute_vertex_normals()
+def main() -> None:
+    parser = argparse.ArgumentParser(description="View a triangle mesh with Rerun")
+    parser.add_argument("mesh", type=Path, help="Path to a mesh file (e.g. .ply)")
+    args = parser.parse_args()
 
-nksr_vertices = np.asarray(nksr.vertices)
-nksr_faces    = np.asarray(nksr.triangles)
-nksr_normals  = np.asarray(nksr.vertex_normals)
+    if not args.mesh.exists():
+        raise FileNotFoundError(args.mesh)
 
-# poisson = o3d.io.read_triangle_mesh("outputs/possoin_reconstruction.ply")
-# poisson.compute_vertex_normals()
+    mesh = o3d.io.read_triangle_mesh(str(args.mesh))
+    mesh.compute_vertex_normals()
 
-# poisson_vertices = np.asarray(poisson.vertices)
-# poisson_faces    = np.asarray(poisson.triangles)
-# poisson_normals  = np.asarray(poisson.vertex_normals)
+    rr.init("mesh_viewer", spawn=True)
+    rr.log(
+        args.mesh.stem,
+        rr.Mesh3D(
+            vertex_positions=np.asarray(mesh.vertices),
+            triangle_indices=np.asarray(mesh.triangles),
+            vertex_normals=np.asarray(mesh.vertex_normals),
+        ),
+    )
 
-# pcd = o3d.io.read_triangle_mesh("outputs/pcd_reconstruction.ply")
-# pcd.compute_vertex_normals()
+    input("Press Enter to exit...")
 
-# pcd_vertices = np.asarray(pcd.vertices)
-# pcd_faces    = np.asarray(pcd.triangles)
-# pcd_normals  = np.asarray(pcd.vertex_normals)
 
-rr.log("nksr", rr.Mesh3D(
-    vertex_positions=nksr_vertices,
-    triangle_indices=nksr_faces,
-    vertex_normals=nksr_normals,
-))
-
-# rr.log("pcd", rr.Mesh3D(
-#     vertex_positions=pcd_vertices,
-#     triangle_indices=pcd_faces,
-#     vertex_normals=pcd_normals,
-# ))
-
-# rr.log("poisson", rr.Mesh3D(
-#     vertex_positions=poisson_vertices,
-#     triangle_indices=poisson_faces,
-#     vertex_normals=poisson_normals,
-# ))
-
-input("Press Enter to exit...")
+if __name__ == "__main__":
+    main()

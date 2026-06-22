@@ -3,7 +3,8 @@ import subprocess
 from pathlib import Path
 from datetime import datetime
 
-def main() ->None:
+
+def main() -> None:
     parser = argparse.ArgumentParser(
         description="VDBFusion reconstruction (supported public workflow)"
     )
@@ -13,6 +14,8 @@ def main() ->None:
         help="Path to YAML config",
     )
     args = parser.parse_args()
+
+    start = datetime.now()
 
     config_path = Path(args.config).resolve()
     if not config_path.exists():

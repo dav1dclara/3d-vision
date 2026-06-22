@@ -1,23 +1,16 @@
-# poisson_config.yaml
+# poisson_config.yaml — Screened Poisson reconstruction
 
-# ── File paths ────────────────────────────────────────────────────────────
 paths:
   pointcloud_ply: "/work/courses/3dv/team13/2026-03-09_16.19.44/pointcloud.ply"
   output_dir: "/work/scratch/oscipal/outputs"
   output_mesh: "poisson_reconstruction_small_scene.ply"
 
-# ── Poisson reconstruction ────────────────────────────────────────────────
-# Octree depth controls resolution:
-# 10 → ~0.1m, 11 → ~0.05m (matches NKSR complex), 12 → ~0.025m (slow)
 reconstruction:
-  depth: 12
+  depth: 12             # octree depth; 10≈0.1m, 11≈0.05m, 12≈0.025m
   width: 0
   scale: 1.1
   linear_fit: false
   n_threads: -1         # -1 = all cores
 
-# ── Density trimming ──────────────────────────────────────────────────────
-# Remove vertices below this density percentile (trims hallucinated exterior)
-# 5 = conservative, 15-20 = aggressive
 trimming:
-  density_percentile: 5
+  density_percentile: 5  # drop vertices below this density percentile

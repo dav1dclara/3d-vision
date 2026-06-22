@@ -1,3 +1,5 @@
+# vdbfusion_config.yaml — VDBFusion TSDF reconstruction
+
 input:
   las_path: "/work/scratch/vpacheco/2026-03-09_16.19.44/pointcloud.las"
 
@@ -9,7 +11,7 @@ fusion:
   min_weight: 0.8
 
 preprocess:
-  downsample_voxel_size: 0.0
+  downsample_voxel_size: 0.0   # 0 = no downsampling
 
 static_mode:
   fixed_origin: [0.0, 0.0, 2.0]
@@ -24,5 +26,4 @@ sweep:
   min_weight_values: [0.0, 0.5, 0.8]
   downsample_voxel_sizes: [0.0, 0.01]
   sdf_trunc_values: [0.025, 0.05]
-  voxel_size_values: [0.01, 0.02,0.04]
-  output_subdir: "sweeps"
+  voxel_size_values: [0.01, 0.02, 0.04]

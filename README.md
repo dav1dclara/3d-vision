@@ -20,10 +20,12 @@ cd 3d-vision/
 
 ### Dependencies
 
-Create a conda environment, then install the dependencies:
+Create a Python environment, then install the dependencies:
 ```bash
-conda create -n 3DV --file requirements.txt
+conda create -n 3DV python=3.10
 conda activate 3DV
+pip install -r requirements.txt
+# GPU/external deps (torch, nksr, pcdmeshing) come from the team's shared env:
 echo "/work/courses/3dv/team13/miniconda13/envs/nksr/lib/python3.10/site-packages/" > ~/miniconda3/envs/3DV/lib/python3.10/site-packages/shared_env.pth
 ```
 
@@ -41,7 +43,7 @@ The reconstruction pipeline converts a LiDAR point cloud into a colored triangle
 pointcloud.las + pointcloud.ply
         │
         ▼
-Fine voxelization (0.5m cells)
+Fine voxelization (0.25m cells)
         │
         ▼
 Per-cell planarity analysis (SVD)
@@ -57,12 +59,12 @@ NKSR reconstruction per region
   └── Planar-only units → lower detail (vox=0.15-0.2m, detail=0.3-0.5)
         │
         ▼
-Merge all chunks → reconstruction.ply
+Merge all chunks → nksr_reconstruction.ply
 ```
 
 ### Key design decisions
 
-**Geometry-aware chunking** — instead of splitting the scene into a regular grid (which cuts through surfaces and creates boundary artifacts), the scene is first split into uniform 0.5m cells, then each cell's planarity is estimated using PCA/SVD. The ratio of the smallest to largest singular value gives a residual — low residual means flat, high residual means complex geometry.
+**Geometry-aware chunking** — instead of splitting the scene into a regular grid (which cuts through surfaces and creates boundary artifacts), the scene is first split into uniform 0.25m cells, then each cell's planarity is estimated using PCA/SVD. The ratio of the smallest to largest singular value gives a residual — low residual means flat, high residual means complex geometry.
 
 **Complex-first region growing** — complex regions (objects, furniture, people) grow first and greedily absorb all neighbouring planar chunks (walls, floors, ceilings). This means NKSR sees the full context of every edge — the wall and the object in the same reconstruction call — producing clean transitions without stitching artifacts. Only planar chunks that are never touched by a complex region form their own isolated planar reconstruction units.
 
@@ -72,7 +74,7 @@ Merge all chunks → reconstruction.ply
 
 ### Configuration
 
-All parameters are set in `config.yaml`
+All parameters are set in `configs/nksr_config.yaml`
 
 ### Running
 ```bash
@@ -80,13 +82,13 @@ conda activate 3DV
 python scripts/nksr_reconstruction.py
 ```
 
-Output is written to `outputs/reconstruction.ply`. Individual chunk PLYs are saved to `outputs/chunks/` during reconstruction and can be inspected separately.
+Output is written to `outputs/nksr_reconstruction.ply`. Individual chunk PLYs are saved to `outputs/chunks/` during reconstruction and can be inspected separately.
 
 ### Output
 
 The pipeline produces a colored triangle mesh in PLY format with per-vertex RGB colors projected from the original LiDAR scan. The mesh can be viewed in CloudCompare, MeshLab, or using the provided viewer script:
 ```bash
-python scripts/view_mesh.py outputs/reconstruction.ply
+python scripts/view_mesh.py outputs/nksr_reconstruction.ply
 ```
 
 ## Mesh Quality Assessment
@@ -125,11 +127,7 @@ Install VDBFusion first:
 pip install vdbfusion
 ```
 
-Edit `configs/vdbfusion_config.yaml` and choose one mode:
-- `dataset_type: "las"` for your LAS point cloud (chunked pseudo-scans)
-- `dataset_type: "kitti"` for KITTI odometry data
-
-Run:
+Point `input.las_path` in `configs/vdbfusion_config.yaml` at your LAS point cloud, then run:
 ```bash
 python scripts/vdbfusion_reconstruction.py --config configs/vdbfusion_config.yaml
 ```

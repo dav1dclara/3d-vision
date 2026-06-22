@@ -12,7 +12,7 @@ A virtual ball of radius r is rolled over the point cloud. Wherever it simultane
 
 ## Requirements
 
-See requirements_bpa.txt for the dependency list.
+See the top-level `requirements.txt` for the dependency list.
 
 ## Configuration
 
@@ -44,7 +44,7 @@ If you change `voxel_size`, adjust `radii` proportionally, or leave `radii` empt
 ## Run
 
 1. Activate your Python environment.
-2. Install the requirements file (pip or conda).
+2. Install dependencies: `pip install -r requirements.txt`.
 3. Edit `configs/bpa_config.yaml` with your paths and parameters.
 4. Run from the repository root:
 

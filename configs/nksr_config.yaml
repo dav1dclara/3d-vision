@@ -1,57 +1,41 @@
-# config.yaml
+# nksr_config.yaml — NKSR geometry-aware chunked reconstruction
 
-# ── File paths ────────────────────────────────────────────────────────────
 paths:
-  pointcloud_las: "/work/courses/3dv/team13/2026-05-06_17.33.13/3dv_largeScale-registered.las"  # set to null to use PLY only
+  pointcloud_las: "/work/courses/3dv/team13/2026-05-06_17.33.13/3dv_largeScale-registered.las"  # null to use PLY only
   pointcloud_ply: "/work/courses/3dv/team13/2026-05-06_17.33.13/3dv_largeScale-registered.ply"
   output_dir: "/work/courses/3dv/team13/outputs"
   output_mesh: "nksr_reconstruction.ply"
 
-# ── Voxel sizes ───────────────────────────────────────────────────────────
 voxel:
-  base_size: 0.1          # base voxel size in metres (VOXEL_SIZE)
-  fine_chunk_size: 0.25    # fine chunk size for segmentation in metres (FINE_SIZE)
+  base_size: 0.1           # [m]
+  fine_chunk_size: 0.25    # segmentation cell size [m]
 
-# ── Planarity detection ───────────────────────────────────────────────────
 planarity:
-  residual_threshold: 0.1      # below this = planar chunk
-  angle_threshold_deg: 15.0     # max angle between normals to merge planar chunks
-  coplanar_dist_threshold: 0.1  # max point-to-plane distance to merge planar chunks
-  min_points_per_chunk: 20      # min points for a chunk to be considered
+  residual_threshold: 0.1       # below this = planar
+  angle_threshold_deg: 15.0     # max normal angle to merge planar chunks [deg]
+  coplanar_dist_threshold: 0.1  # max point-to-plane distance to merge [m]
+  min_points_per_chunk: 20
 
-# ── Reconstruction quality ────────────────────────────────────────────────
 reconstruction:
-  # Complex units (objects, furniture, people)
   complex_detail_level: 1
   complex_mise_iter: 1
-  complex_voxel_factor: 0.15     # multiplied by base_size → 0.05m
-  complex_max_extent_m: 2.0    # max extent of a unit to be considered complex (otherwise planar)
-  complex_max_pts: 1_000_000  # max points per complex region
-  complex_boundary_inset_m: 0.1
+  complex_voxel_factor: 0.15    # × base_size
+  complex_max_extent_m: 2.0
+  complex_max_pts: 1_000_000
 
-  # Planar-only units
-  planar_very_flat_threshold: 0.02    # residual below this = very flat
+  planar_very_flat_threshold: 0.02   # residual below this = very flat
   planar_very_flat_detail: 0.3
   planar_very_flat_mise_iter: 1
-  planar_very_flat_voxel_factor: 2  # → 0.2m
+  planar_very_flat_voxel_factor: 2   # × base_size
 
   planar_flat_detail: 0.5
   planar_flat_mise_iter: 1
-  planar_flat_voxel_factor: 1.5       # → 0.15m
+  planar_flat_voxel_factor: 1.5      # × base_size
   planar_overlap_m: 0.3
 
-# ── Subsampling ───────────────────────────────────────────────────────────
 subsampling:
-  planar_max_pts: 300_000       # max points for planar reconstruction
-  complex_oom_fallback_levels:  # progressively tried on OOM
-    - 500_000
-    - 300_000
-    - 150_000
-    - 50_000
-  complex_last_resort_pts: 100_000   # final fallback point count
-  complex_last_resort_voxel_factor: 1.0  # → base_size
+  planar_max_pts: 300_000
 
-# ── Misc ──────────────────────────────────────────────────────────────────
 misc:
-  min_pts_per_unit: 200         # skip reconstruction units smaller than this
+  min_pts_per_unit: 200
   gpu_device: "cuda:0"
